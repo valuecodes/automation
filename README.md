@@ -80,7 +80,7 @@ other sections still render.
 
 ```mermaid
 flowchart TD
-    A[audit job: check out, run pnpm audit from the lockfile] --> B[dashboard job: read the catalog, packageManager,<br>.nvmrc and the gitleaks script through the API]
+    A[audit job: check out, run pnpm audit from the lockfile] --> B[update-issue job: read the catalog, packageManager,<br>.nvmrc and the gitleaks script through the API]
     B --> C[One step per section: npm registry, GitHub releases,<br>nodejs.org index, audit result]
     C -- a step fails --> C2[Its section says check failed;<br>the run goes red at the end]
     C --> D[Build the body and hash the content]

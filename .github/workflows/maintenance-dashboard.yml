@@ -79,7 +79,7 @@ jobs:
           if-no-files-found: error
 
   dashboard:
-    name: dashboard
+    name: update-issue
     needs: audit
     if: always()
     runs-on: ubuntu-latest
