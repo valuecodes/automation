@@ -5,12 +5,31 @@ repo, never `@main`, so a change here never reaches a caller until it is re-pinn
 
 ## `node-update.yml`
 
-Opens a PR that bumps `.nvmrc` when a newer Node.js release is out on the same major.
-Security releases get a PR right away; other releases wait `min-release-age-days` (default 14).
-It uses only `GITHUB_TOKEN` and the REST API: no checkout, no secrets, no GitHub App.
+Keeps the exact Node.js version in `.nvmrc` current, without a bot account, a GitHub App,
+secrets or third-party actions. When a newer release lands on the same major it opens one pull
+request: immediately for security releases, after a configurable cooldown
+(`min-release-age-days`, default 14) for the rest. Each PR links the release notes and changelog,
+flags security releases, and closes the workflow's other open Node.js PRs.
 
-Each run opens at most one PR, on the branch `node-update/v<version>`, and closes its own older
-Node.js PRs. A version that already had a PR, even a closed one, is not proposed again.
+It uses only `GITHUB_TOKEN` and the REST API: no extra secrets to configure, and nothing is
+checked out. One branch per version (`node-update/v<version>`); a version that already had a PR,
+even a closed one, is not proposed again.
+
+### How a run decides
+
+```mermaid
+flowchart TD
+    A[Read exact version from .nvmrc] --> B[Fetch nodejs.org release index]
+    B --> C{Newer release on the same major?}
+    C -- no --> Z1[Up to date, exit]
+    C -- yes --> D{Security release,<br>or older than min-release-age-days?}
+    D -- none qualify --> Z1
+    D -- newest that qualifies --> E{PR for this version ever existed?}
+    E -- yes --> Z2[PR for this version already exists, exit]
+    E -- no --> F[Create branch node-update/vX.Y.Z<br>and commit .nvmrc via the API]
+    F --> G[Open PR with release notes,<br>changelog link and security flag]
+    G --> H[Close this workflow's other open Node.js PRs]
+```
 
 ### Setup in the calling repo
 
