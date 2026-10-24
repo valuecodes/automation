@@ -1,0 +1,133 @@
+name: Node.js update (reusable)
+
+# Opens a PR that bumps `.nvmrc` when a newer Node.js release is out on the same
+# major. Security releases open a PR right away; others wait `min-release-age-days`,
+# like pnpm's `minimumReleaseAge`. It uses only `GITHUB_TOKEN` and the REST API (no
+# checkout, no secrets), so its PRs start CI in an approval-required state: click
+# "Approve workflows to run" on the PR. Other repos call it with
+# `uses: valuecodes/automation/.github/workflows/node-update.yml@<sha>`.
+
+on:
+  workflow_call:
+    inputs:
+      min-release-age-days:
+        description: Days a non-security release must age before its PR opens.
+        type: number
+        default: 14
+
+permissions: {}
+
+jobs:
+  node-update:
+    name: node-update
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: node-update-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Open a PR for a newer Node.js release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MIN_AGE_DAYS: ${{ inputs.min-release-age-days }}
+        run: |
+          set -euo pipefail
+
+          # Read `.nvmrc` at a fixed commit, so the branch below starts from the
+          # same tree the version came from.
+          base=$(gh api "repos/$REPO" --jq .default_branch)
+          base_sha=$(gh api "repos/$REPO/git/ref/heads/$base" --jq .object.sha)
+          nvmrc=$(gh api "repos/$REPO/contents/.nvmrc?ref=$base_sha")
+          current=$(jq -r '.content | gsub("\n"; "") | @base64d | gsub("^\\s+|\\s+$"; "") | ltrimstr("v")' <<<"$nvmrc")
+          if [[ ! $current =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::.nvmrc must hold an exact version such as 24.22.1, found '$current'."
+            exit 1
+          fi
+
+          # Releases on the `.nvmrc` major newer than it, then the newest one that is
+          # a security release or old enough.
+          releases=$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json)
+          newer=$(jq -c --arg cur "$current" '
+            def ver: ltrimstr("v") | split(".") | map(tonumber);
+            ($cur | ver) as $c
+            | map(select((.version | ver) as $v | $v[0] == $c[0] and $v > $c))' <<<"$releases")
+          target=$(jq -r --argjson days "$MIN_AGE_DAYS" '
+            def ver: ltrimstr("v") | split(".") | map(tonumber);
+            map(select(.security or ((.date + "T00:00:00Z" | fromdateiso8601) <= now - $days * 86400)))
+            | max_by(.version | ver) | .version // empty | ltrimstr("v")' <<<"$newer")
+          if [[ -z $target ]]; then
+            echo "Node.js $current is up to date."
+            exit 0
+          fi
+          if [[ ! $target =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected version '$target' in the Node.js release index."
+            exit 1
+          fi
+          security=$(jq --arg tgt "$target" '
+            def ver: ltrimstr("v") | split(".") | map(tonumber);
+            ($tgt | ver) as $t | any(.[]; (.version | ver) <= $t and .security)' <<<"$newer")
+
+          # One branch per version. Any PR for it, even a closed one, means a human
+          # has seen it already.
+          branch="node-update/v$target"
+          if [[ -n $(gh pr list --repo "$REPO" --head "$branch" --state all --json number --jq '.[].number') ]]; then
+            echo "A PR for $branch already exists."
+            exit 0
+          fi
+          # A branch without a PR is left over from a run that failed before opening
+          # it. Only delete it if every commit it adds is this workflow's (or it adds
+          # none, when the run failed before committing).
+          if branch_sha=$(gh api "repos/$REPO/git/ref/heads/$branch" --jq .object.sha 2>/dev/null); then
+            ours=$(gh api "repos/$REPO/compare/$base_sha...$branch_sha" \
+              --jq '[.commits[].author.login] | all(. == "github-actions[bot]")')
+            if [[ $ours != true ]]; then
+              echo "::error::Branch $branch exists without a PR and was not made by this workflow."
+              exit 1
+            fi
+            gh api -X DELETE "repos/$REPO/git/refs/heads/$branch" --silent
+          fi
+
+          # Commit through the API: GitHub signs it, and no credentials touch disk.
+          gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$base_sha" --silent
+          content=$(jq -r --arg cur "$current" --arg tgt "$target" \
+            '.content | gsub("\n"; "") | @base64d | split($cur) | join($tgt) | @base64' <<<"$nvmrc")
+          gh api -X PUT "repos/$REPO/contents/.nvmrc" \
+            -f message="chore: bump Node.js to $target" \
+            -f content="$content" \
+            -f sha="$(jq -r .sha <<<"$nvmrc")" \
+            -f branch="$branch" \
+            --silent
+
+          title="chore: bump Node.js to $target"
+          if [[ $security == true ]]; then
+            title+=" (security)"
+          fi
+          major=${target%%.*}
+          body=$(cat <<EOF
+          Bumps \`.nvmrc\` from $current to $target.
+
+          - Release notes: https://github.com/nodejs/node/releases/tag/v$target
+          - Every release since $current: https://github.com/nodejs/node/blob/main/doc/changelogs/CHANGELOG_V$major.md
+          - Security release in this range: $security
+
+          This PR was opened with \`GITHUB_TOKEN\`, so its CI waits for approval: click
+          **Approve workflows to run** below. If no runs show up, close and reopen this PR.
+          Also update any Node.js pin outside the repo, such as a hosting build variable
+          (\`NODE_VERSION\` on Cloudflare).
+          EOF
+          )
+          url=$(gh pr create --repo "$REPO" --base "$base" --head "$branch" --title "$title" --body "$body")
+          echo "Opened $url"
+
+          # Close this workflow's older Node.js PRs; the new one replaces them.
+          gh pr list --repo "$REPO" --state open --author app/github-actions --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("node-update/v")) | "\(.number) \(.headRefName)"' |
+            while read -r number head; do
+              if [[ $head != "$branch" ]]; then
+                gh pr close "$number" --repo "$REPO" --delete-branch --comment "Superseded by $url."
+              fi
+            done
