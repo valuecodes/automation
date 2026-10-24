@@ -380,7 +380,7 @@ jobs:
             echo "::error::.nvmrc must hold an exact version such as 24.22.1, found '$cur'."
             exit 1
           fi
-          # Same rule as node-update.yml: security releases count right away.
+          # Security releases count right away; the rest wait like other releases.
           target=$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json | jq -r --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" '
             def ver: ltrimstr("v") | split(".") | map(tonumber);
             ($cur | ver) as $c

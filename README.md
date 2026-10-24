@@ -6,60 +6,6 @@ repo, never `@main`, so a change here never reaches a caller until it is re-pinn
 The actions these workflows use are pinned by SHA too. Dependabot proposes one grouped PR a
 month for releases at least 14 days old; callers get those bumps only when they re-pin.
 
-## `node-update.yml`
-
-Keeps the exact Node.js version in `.nvmrc` current, without a bot account, a GitHub App,
-secrets or third-party actions. When a newer release lands on the same major it opens one pull
-request: immediately for security releases, after a configurable cooldown
-(`min-release-age-days`, default 14) for the rest. Each PR links the release notes and changelog,
-flags security releases, and closes the workflow's other open Node.js PRs.
-
-It uses only `GITHUB_TOKEN` and the REST API: no extra secrets to configure, and nothing is
-checked out. One branch per version (`node-update/v<version>`); a version that already had a PR,
-even a closed one, is not proposed again.
-
-### How a run decides
-
-```mermaid
-flowchart TD
-    A[Read exact version from .nvmrc] --> B[Fetch nodejs.org release index]
-    B --> C{Newer release on the same major?}
-    C -- no --> Z1[Up to date, exit]
-    C -- yes --> D{Security release,<br>or older than min-release-age-days?}
-    D -- none qualify --> Z1
-    D -- newest that qualifies --> E{PR for this version ever existed?}
-    E -- yes --> Z2[PR for this version already exists, exit]
-    E -- no --> F[Create branch node-update/vX.Y.Z<br>and commit .nvmrc via the API]
-    F --> G[Open PR with release notes,<br>changelog link and security flag]
-    G --> H[Close this workflow's other open Node.js PRs]
-```
-
-### Setup in the calling repo
-
-1. Settings → Actions → General → Workflow permissions: enable **Allow GitHub Actions to create
-   and approve pull requests**. Without it, `gh pr create` fails.
-2. Add the caller below. The caller job must grant `contents: write` and `pull-requests: write`
-   itself; a called workflow cannot raise the caller's token permissions.
-3. PRs opened with `GITHUB_TOKEN` do not start CI on their own. Click **Approve workflows to run**
-   on the PR. If no runs show up, close and reopen the PR.
-
-```yaml
-name: Node.js update
-on:
-  schedule:
-    - cron: "17 5 * * *"
-  workflow_dispatch:
-permissions: {}
-jobs:
-  node-update:
-    permissions:
-      contents: write
-      pull-requests: write
-    uses: valuecodes/automation/.github/workflows/node-update.yml@<full-commit-sha>
-```
-
-Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
-
 ## `maintenance-dashboard.yml`
 
 Keeps one issue per repo, titled **Maintenance dashboard** and labelled `maintenance-dashboard`,
@@ -72,7 +18,8 @@ missing shows as "not applicable".
 The workflow never changes code: no PRs, no commits. Doing the updates stays manual. Every run
 recomputes the whole body and edits the issue only when the content changed, so the edit history
 shows real changes. Editing an issue body notifies nobody; urgent security findings still arrive
-through Dependabot alerts. If someone closes the issue, the next run creates a new one.
+through Dependabot alerts, but a Node.js security release (listed right away, without the
+cooldown) only shows up here. If someone closes the issue, the next run creates a new one.
 
 The `audit` job checks out the repo to run `pnpm audit` from the lockfile alone (no install, and
 `--ignore-pnpmfile` so no repo code runs). Everything else is read through the REST API with
@@ -114,6 +61,8 @@ jobs:
       issues: write
     uses: valuecodes/automation/.github/workflows/maintenance-dashboard.yml@<full-commit-sha>
 ```
+
+Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
 
 Inputs: `min-release-age-days` (number, default `14`) and `gitleaks-script` (string, default
 `.github/scripts/secrets-scan.sh`; empty skips the gitleaks check).
