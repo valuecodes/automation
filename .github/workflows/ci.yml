@@ -26,8 +26,10 @@ jobs:
         with:
           persist-credentials: false
 
+      # zizmor prefers the `$/` self-repository syntax, but actionlint 1.7.12
+      # rejects it; switch once actionlint accepts `$/`.
       - name: Setup
-        uses: ./.github/actions/setup
+        uses: ./.github/actions/setup # zizmor: ignore[self-repository]
 
       - name: oxfmt
         run: pnpm format:check
