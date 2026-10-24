@@ -82,6 +82,35 @@ Inputs:
   test a change here against a real repo. The caller must still grant `issues: write`, because a
   called workflow's job permissions are checked against the caller's before anything runs.
 
+## `workflow-lint.yml`
+
+Lints the calling repo's GitHub Actions files on every run:
+
+- [actionlint](https://github.com/rhysd/actionlint) checks workflow syntax, `${{ }}`
+  expressions, job and step references, and, through shellcheck, the bash in `run:` scripts.
+  It is downloaded at an exact version and its checksum is verified.
+- [zizmor](https://docs.zizmor.sh) checks for security problems: template injection, actions
+  not pinned by SHA, broad permissions, persisted credentials and risky triggers.
+
+Both tools read the caller's own `.github/actionlint.yaml` and `zizmor.yml` when present, so
+per-repo tuning stays in the caller. The workflow needs no secrets and no inputs.
+
+### Setup in the calling repo
+
+Add the job below to the caller's CI. The caller job must grant `contents: read`. The check
+shows up as `workflow-lint / workflow-lint`; add it to the `needs` of the job you require on
+the base branch.
+
+```yaml
+jobs:
+  workflow-lint:
+    permissions:
+      contents: read
+    uses: valuecodes/automation/.github/workflows/workflow-lint.yml@<full-commit-sha>
+```
+
+Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
+
 ## License
 
 [MIT](LICENSE)

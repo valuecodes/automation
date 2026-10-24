@@ -14,7 +14,8 @@ Reusable GitHub Actions workflows that other repos call with
 | Path                                          | What                                                  |
 | --------------------------------------------- | ----------------------------------------------------- |
 | `.github/workflows/maintenance-dashboard.yml` | Reusable: keeps the **Maintenance dashboard** issue   |
-| `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, actionlint, zizmor             |
+| `.github/workflows/workflow-lint.yml`         | Reusable: actionlint and zizmor over workflow files   |
+| `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, then `workflow-lint.yml`       |
 | `.github/actions/setup/`                      | Composite setup action: pnpm, Node.js, frozen install |
 | `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions       |
 
@@ -37,8 +38,8 @@ pnpm format:check                # oxfmt --check (no writes)
 There is no post-edit formatting hook: run `pnpm format` yourself before committing.
 
 actionlint (with shellcheck over the `run:` scripts) and zizmor run in CI only; they are not
-npm packages. CI (`.github/workflows/ci.yml`) runs all three on PRs and on push to `main`; its
-one job, `ci`, is the check to require on `main`.
+npm packages. CI (`.github/workflows/ci.yml`) runs all three on PRs and on push to `main`,
+the two linters through `workflow-lint.yml`; its `ci` job is the check to require on `main`.
 
 ---
 
@@ -51,7 +52,7 @@ one job, `ci`, is the check to require on `main`.
   `persist-credentials: false` and run no repo code.
 - **Few third-party actions.** Stick to `actions/*` plus the ones already in use; do the rest
   in shell with `gh`, `jq`, `yq` and `curl`, which the runner ships. Download any extra tool by
-  exact version and verify its checksum (see actionlint in `ci.yml`).
+  exact version and verify its checksum (see actionlint in `workflow-lint.yml`).
 - **Pin every action by full SHA** with the version as a comment:
   `uses: actions/checkout@<sha> # v7.0.1`. Dependabot keeps both current.
 - **Permissions:** `permissions: {}` at the top level, then the minimum per job. A reusable
