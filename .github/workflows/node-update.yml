@@ -18,8 +18,8 @@ on:
 permissions: {}
 
 jobs:
-  node-update:
-    name: node-update
+  bump-nvmrc:
+    name: bump-nvmrc
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
