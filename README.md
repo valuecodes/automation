@@ -97,9 +97,10 @@ per-repo tuning stays in the caller. The workflow needs no secrets and no inputs
 
 ### Setup in the calling repo
 
-Add the job below to the caller's CI. The caller job must grant `contents: read`. The check
-shows up as `workflow-lint / workflow-lint`; add it to the `needs` of the job you require on
-the base branch.
+Add the job below to the caller's CI. The caller job must grant `contents: read`. Each tool
+runs as its own job, so the checks show up as `workflow-lint / actionlint` and
+`workflow-lint / zizmor`. Add the caller job to the `needs` of the job you require on the base
+branch; it fails when either check fails.
 
 ```yaml
 jobs:
