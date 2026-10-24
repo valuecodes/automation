@@ -19,6 +19,10 @@ on:
         description: File holding `GITLEAKS_VERSION="x.y.z"`. Empty skips the check.
         type: string
         default: .github/scripts/secrets-scan.sh
+      dry-run:
+        description: Write the body to the run summary only; leave the issue and label alone.
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -99,6 +103,7 @@ jobs:
       WORKFLOW_REF: ${{ github.workflow_ref }}
       MIN_AGE_DAYS: ${{ inputs.min-release-age-days }}
       GITLEAKS_SCRIPT: ${{ inputs.gitleaks-script }}
+      DRY_RUN: ${{ inputs.dry-run }}
     steps:
       - name: Download the audit result
         continue-on-error: true
@@ -393,15 +398,38 @@ jobs:
                 | "\($t.version | ltrimstr("v")) \($t.date) \(any($newer[]; (.version | ver) <= $tv and .security))"
               else "" end')
           if [[ -z $target ]]; then
-            echo "**Node.js** $cur: up to date." > "$out"
+            status="up to date."
           else
             read -r version date security <<<"$target"
             note=$date
             if [[ $security == true ]]; then
               note="$date, includes a security release"
             fi
-            echo "**Node.js** $cur: $version ($note) available." > "$out"
+            status="$version ($note) available."
           fi
+
+          # The update above stays on the `.nvmrc` major, so say where that major
+          # is in its lifecycle and name a newer LTS major if there is one.
+          lifecycle=$(curl -fsSL --retry 3 https://raw.githubusercontent.com/nodejs/Release/main/schedule.json |
+            jq -r --argjson major "${cur%%.*}" --arg today "$(date -u +%F)" '
+            def phase:
+              if $today >= .end then "past end of life"
+              elif .maintenance and $today >= .maintenance then "in maintenance"
+              elif .lts and $today >= .lts then "Active LTS"
+              else "Current" end;
+            .["v\($major)"] as $s
+            | ( to_entries
+                | map(select(.key | test("^v[0-9]+$")) | .value + {major: (.key[1:] | tonumber)})
+                | map(select(.lts and .lts <= $today and $today < .end))
+                | max_by(.major) ) as $lts
+            | if $s == null then "Node.js \($major) is not in the release schedule."
+              else
+                (if $today >= $s.end then "Node.js \($major) reached end of life on \($s.end)"
+                 else "Node.js \($major) is \($s | phase), end of life \($s.end)" end)
+                + (if $lts and $lts.major > $major then "; Node.js \($lts.major) is \($lts | phase)" else "" end)
+                + "."
+              end')
+          echo "**Node.js** $cur: $status $lifecycle" > "$out"
 
       - name: Update the dashboard issue
         run: |
@@ -476,15 +504,18 @@ jobs:
             echo "$marker"
           } > "$RUNNER_TEMP/body.md"
 
-          gh label create maintenance-dashboard --repo "$REPO" --force \
-            --color 1d76db --description "Kept up to date by the maintenance-dashboard workflow"
-          numbers=$(gh issue list --repo "$REPO" --label maintenance-dashboard --state open \
-            --json number --jq 'sort_by(.number) | .[].number')
-          if [[ -z $numbers ]]; then
-            url=$(gh issue create --repo "$REPO" --title "Maintenance dashboard" \
-              --label maintenance-dashboard --body-file "$RUNNER_TEMP/body.md")
-            echo "Created $url. Pin it in the repo's issue list."
-          else
+          publish() {
+            local numbers number url existing
+            gh label create maintenance-dashboard --repo "$REPO" --force \
+              --color 1d76db --description "Kept up to date by the maintenance-dashboard workflow"
+            numbers=$(gh issue list --repo "$REPO" --label maintenance-dashboard --state open \
+              --json number --jq 'sort_by(.number) | .[].number')
+            if [[ -z $numbers ]]; then
+              url=$(gh issue create --repo "$REPO" --title "Maintenance dashboard" \
+                --label maintenance-dashboard --body-file "$RUNNER_TEMP/body.md")
+              echo "Created $url. Pin it in the repo's issue list."
+              return
+            fi
             number=${numbers%%$'\n'*}
             if [[ $numbers == *$'\n'* ]]; then
               echo "::warning::Several open issues carry the maintenance-dashboard label; editing #$number and leaving the rest."
@@ -497,6 +528,12 @@ jobs:
               gh issue edit "$number" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md" > /dev/null
               echo "Updated issue #$number."
             fi
+          }
+
+          if [[ $DRY_RUN == true ]]; then
+            echo "Dry run: the body is in the run summary; the issue was not touched."
+          else
+            publish
           fi
 
           failed=(*.failed)
