@@ -15,11 +15,17 @@ and `pnpm audit` findings. Like pnpm's `minimumReleaseAge`, a release is listed 
 `min-release-age-days` old (default 14); prereleases never are. A check whose source file is
 missing shows as "not applicable".
 
+Node.js updates stay on the `.nvmrc` major, so the Node.js line also gives that major's phase and
+end-of-life date from the [release schedule](https://github.com/nodejs/Release), and names a newer
+LTS major when there is one: "Node.js 22 is in maintenance, end of life 2027-04-30; Node.js 24 is
+Active LTS."
+
 The workflow never changes code: no PRs, no commits. Doing the updates stays manual. Every run
 recomputes the whole body and edits the issue only when the content changed, so the edit history
 shows real changes. Editing an issue body notifies nobody; urgent security findings still arrive
 through Dependabot alerts, but a Node.js security release (listed right away, without the
-cooldown, and flagged when any release in the range is one) only shows up here. If someone closes the issue, the next run creates a new one.
+cooldown, and flagged when any release in the range is one) only shows up here. If someone closes
+the issue, the next run creates a new one.
 
 The `audit` job checks out the repo to run `pnpm audit` from the lockfile alone (no install, and
 `--ignore-pnpmfile` so no repo code runs). Everything else is read through the REST API with
@@ -35,7 +41,9 @@ flowchart TD
     C -- a step fails --> C2[Its section says check failed;<br>the run goes red at the end]
     C --> D[Build the body and hash the content]
     C2 --> D
-    D --> E{Open issue with the label?}
+    D --> DR{dry-run?}
+    DR -- yes --> Z2[Body in the run summary only]
+    DR -- no --> E{Open issue with the label?}
     E -- none --> F[Create it]
     E -- one --> G{Hash marker unchanged?}
     G -- yes --> Z[Skip the edit]
@@ -64,5 +72,16 @@ jobs:
 
 Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
 
-Inputs: `min-release-age-days` (number, default `14`) and `gitleaks-script` (string, default
-`.github/scripts/secrets-scan.sh`; empty skips the gitleaks check).
+Inputs:
+
+- `min-release-age-days` (number, default `14`).
+- `gitleaks-script` (string, default `.github/scripts/secrets-scan.sh`; empty skips the gitleaks
+  check).
+- `dry-run` (boolean, default `false`): builds the body and writes it to the run summary, but
+  never creates the label or creates or edits the issue. Use it to try the workflow on a repo, or to
+  test a change here against a real repo. The caller must still grant `issues: write`, because a
+  called workflow's job permissions are checked against the caller's before anything runs.
+
+## License
+
+[MIT](LICENSE)
