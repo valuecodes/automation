@@ -19,7 +19,7 @@ The workflow never changes code: no PRs, no commits. Doing the updates stays man
 recomputes the whole body and edits the issue only when the content changed, so the edit history
 shows real changes. Editing an issue body notifies nobody; urgent security findings still arrive
 through Dependabot alerts, but a Node.js security release (listed right away, without the
-cooldown) only shows up here. If someone closes the issue, the next run creates a new one.
+cooldown, and flagged when any release in the range is one) only shows up here. If someone closes the issue, the next run creates a new one.
 
 The `audit` job checks out the repo to run `pnpm audit` from the lockfile alone (no install, and
 `--ignore-pnpmfile` so no repo code runs). Everything else is read through the REST API with
