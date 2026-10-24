@@ -3,6 +3,9 @@
 Reusable GitHub Actions workflows. Callers pin a full commit SHA of this
 repo, never `@main`, so a change here never reaches a caller until it is re-pinned.
 
+The actions these workflows use are pinned by SHA too. Dependabot proposes one grouped PR a
+month for releases at least 14 days old; callers get those bumps only when they re-pin.
+
 ## `node-update.yml`
 
 Keeps the exact Node.js version in `.nvmrc` current, without a bot account, a GitHub App,
