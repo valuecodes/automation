@@ -381,20 +381,24 @@ jobs:
             exit 1
           fi
           # Security releases count right away; the rest wait like other releases.
+          # The flag covers every release up to the target, so a security release
+          # followed by a newer regular one is still flagged.
           target=$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json | jq -r --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" '
             def ver: ltrimstr("v") | split(".") | map(tonumber);
             ($cur | ver) as $c
-            | map(select((.version | ver) as $v | $v[0] == $c[0] and $v > $c))
-            | map(select(.security or ((.date + "T00:00:00Z" | fromdateiso8601) <= $cutoff)))
-            | max_by(.version | ver)
-            | if . then "\(.version | ltrimstr("v")) \(.date) \(.security)" else "" end')
+            | map(select((.version | ver) as $v | $v[0] == $c[0] and $v > $c)) as $newer
+            | ($newer | map(select(.security or ((.date + "T00:00:00Z" | fromdateiso8601) <= $cutoff))) | max_by(.version | ver)) as $t
+            | if $t then
+                ($t.version | ver) as $tv
+                | "\($t.version | ltrimstr("v")) \($t.date) \(any($newer[]; (.version | ver) <= $tv and .security))"
+              else "" end')
           if [[ -z $target ]]; then
             echo "**Node.js** $cur: up to date." > "$out"
           else
             read -r version date security <<<"$target"
             note=$date
             if [[ $security == true ]]; then
-              note="security release, $date"
+              note="$date, includes a security release"
             fi
             echo "**Node.js** $cur: $version ($note) available." > "$out"
           fi
