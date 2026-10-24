@@ -26,8 +26,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup
+        uses: ./.github/actions/setup
+
       - name: oxfmt
-        run: npx --yes oxfmt@0.72.0 --check
+        run: pnpm format:check
 
       # actionlint has no official action; download the release binary and
       # verify its checksum. shellcheck is preinstalled on the runner, so

@@ -1,0 +1,22 @@
+# Every external dependency version, referenced as `catalog:` from
+# `package.json`. Update everything with `pnpm up --latest`, which rewrites only
+# this file and the lockfile. Scoped keys must be double-quoted.
+catalog:
+  oxfmt: 0.72.0
+
+# Makes `pnpm add` / `pnpm update` use the catalog and reject conflicting
+# versions. Plain `pnpm install` never evaluates it, so it is an authoring
+# guardrail, not a CI check.
+catalogMode: strict
+
+# 14 days, in minutes: a new release is not resolvable until it is this old.
+# So `pnpm up --latest` deliberately skips fresh releases; use
+# `minimumReleaseAgeExclude` if one package must move faster.
+minimumReleaseAge: 20160
+
+# Fails when a version has weaker trust evidence (provenance, trusted
+# publishing) than an earlier one, the usual sign of a hijacked account.
+# Also re-checked on `--frozen-lockfile` installs. If a downgrade is
+# legitimate, exclude that exact version in `trustPolicyExclude` with a reason,
+# never a bare package name.
+trustPolicy: no-downgrade
