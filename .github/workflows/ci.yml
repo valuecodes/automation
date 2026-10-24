@@ -1,7 +1,7 @@
 name: CI
 
-# Lints the workflow files with actionlint and zizmor. The job is named `ci` so
-# it can be a required check on `main`.
+# Checks formatting with oxfmt and lints the workflow files with actionlint and
+# zizmor. The job is named `ci` so it can be a required check on `main`.
 
 on:
   pull_request:
@@ -25,6 +25,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: oxfmt
+        run: npx --yes oxfmt@0.72.0 --check
 
       # actionlint has no official action; download the release binary and
       # verify its checksum. shellcheck is preinstalled on the runner, so
