@@ -1,0 +1,500 @@
+name: Maintenance dashboard
+
+# Keeps one issue per repo (label `maintenance-dashboard`) listing pending
+# updates: the `catalog:` in `pnpm-workspace.yaml`, pnpm, gitleaks, Node.js and
+# `pnpm audit` findings. The body is recomputed every run and edited only when
+# it changed. No PRs, no commits; updates stay manual. Uses only `GITHUB_TOKEN`:
+# files are read through the REST API, and `pnpm audit` runs from the lockfile
+# without installing. Other repos call it with
+# `uses: valuecodes/automation/.github/workflows/maintenance-dashboard.yml@<sha>`.
+
+on:
+  workflow_call:
+    inputs:
+      min-release-age-days:
+        description: Minimum age of a listed release (npm, pnpm, gitleaks, Node.js).
+        type: number
+        default: 14
+      gitleaks-script:
+        description: File holding `GITLEAKS_VERSION="x.y.z"`. Empty skips the check.
+        type: string
+        default: .github/scripts/secrets-scan.sh
+
+permissions: {}
+
+jobs:
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # Checks out the caller repo.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Check for a pnpm project
+        id: detect
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/audit"
+          if [[ ! -f pnpm-lock.yaml ]]; then
+            echo "skipped: no pnpm-lock.yaml" > "$RUNNER_TEMP/audit/status"
+          elif [[ ! -f package.json ]] || ! jq -e '.packageManager // "" | test("^pnpm@")' package.json > /dev/null; then
+            echo "skipped: package.json has no pnpm packageManager" > "$RUNNER_TEMP/audit/status"
+          else
+            echo "pnpm=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up pnpm
+        if: steps.detect.outputs.pnpm == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Run pnpm audit
+        if: steps.detect.outputs.pnpm == 'true'
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/audit"
+          # Exit 1 with valid JSON means findings; anything else is a failed audit.
+          set +e
+          pnpm audit --json --ignore-pnpmfile > "$out/audit.json" 2> "$out/stderr"
+          code=$?
+          set -e
+          if [[ $code -gt 1 ]] || ! jq -e 'has("advisories")' "$out/audit.json" > /dev/null 2>&1; then
+            echo "failed: pnpm audit exited with $code" > "$out/status"
+            echo "::warning::pnpm audit failed (exit $code)."
+            cat "$out/stderr"
+          else
+            echo ok > "$out/status"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: maintenance-dashboard-audit
+          path: ${{ runner.temp }}/audit
+          retention-days: 1
+          if-no-files-found: error
+
+  dashboard:
+    name: dashboard
+    needs: audit
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: maintenance-dashboard-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      SERVER_URL: ${{ github.server_url }}
+      RUN_ID: ${{ github.run_id }}
+      WORKFLOW_REF: ${{ github.workflow_ref }}
+      MIN_AGE_DAYS: ${{ inputs.min-release-age-days }}
+      GITLEAKS_SCRIPT: ${{ inputs.gitleaks-script }}
+    steps:
+      - name: Download the audit result
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: maintenance-dashboard-audit
+          path: ${{ runner.temp }}/audit
+
+      # Each section step writes `$SECTIONS/NN-name.md` and never stops the
+      # others; the last step treats a missing fragment as a failed check.
+      - name: Read the repo files at this commit
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          SRC="$RUNNER_TEMP/src"
+          SECTIONS="$RUNNER_TEMP/sections"
+          AUDIT="$RUNNER_TEMP/audit"
+          printf 'SRC=%s\nSECTIONS=%s\nAUDIT=%s\n' "$SRC" "$SECTIONS" "$AUDIT" >> "$GITHUB_ENV"
+          mkdir -p "$SRC" "$SECTIONS"
+          if [[ ! $MIN_AGE_DAYS =~ ^[0-9]+$ ]]; then
+            echo "::error::min-release-age-days must be a whole number, got '$MIN_AGE_DAYS'."
+            exit 1
+          fi
+          echo $(( $(date +%s) - MIN_AGE_DAYS * 86400 )) > "$SRC/cutoff"
+
+          # A missing file makes its check "not applicable"; other errors fail.
+          fetch() {
+            local path=$1 dest=$2 err="$RUNNER_TEMP/fetch.err"
+            if gh api "repos/$REPO/contents/$path?ref=$SHA" --jq .content 2> "$err" | tr -d '\n' | base64 -d > "$dest.tmp"; then
+              mv "$dest.tmp" "$dest"
+            elif grep -q 'HTTP 404' "$err"; then
+              rm -f "$dest.tmp"
+              echo "$path is not in the repo."
+            else
+              cat "$err" >&2
+              return 1
+            fi
+          }
+          fetch pnpm-workspace.yaml "$SRC/pnpm-workspace.yaml"
+          fetch package.json "$SRC/package.json"
+          fetch .nvmrc "$SRC/.nvmrc"
+          if [[ -n $GITLEAKS_SCRIPT ]]; then
+            fetch "$GITLEAKS_SCRIPT" "$SRC/gitleaks-script"
+          fi
+
+          # From a packument: the newest stable, non-deprecated, old-enough
+          # version on the current major and on a higher one (capped by $maxmajor).
+          cat > "$SRC/newer.jq" <<'EOF'
+          def ver: split(".") | map(tonumber);
+          ($cur | ver) as $c
+          | .time as $time
+          | [ .versions | to_entries[]
+              | select(.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+              | select(.value.deprecated | not)
+              | .key
+              | select(ver > $c)
+              | select(ver[0] <= ($maxmajor // ver[0]))
+              | select($time[.] != null and ($time[.] | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) <= $cutoff)
+            ] as $cands
+          | ($cands | map(select(ver[0] == $c[0])) | max_by(ver)) as $inMajor
+          | ($cands | map(select(ver[0] > $c[0])) | max_by(ver)) as $major
+          | { name: $name, current: $cur,
+              inMajor: $inMajor, inMajorDate: (if $inMajor then $time[$inMajor][0:10] else null end),
+              major: $major, majorDate: (if $major then $time[$major][0:10] else null end) }
+          EOF
+          touch "$SRC/.ok"
+
+      - name: "Section: security (pnpm audit)"
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          test -f "$SRC/.ok"
+          out="$SECTIONS/10-security.md"
+          run_url="$SERVER_URL/$REPO/actions/runs/$RUN_ID"
+          if [[ ! -f $AUDIT/status ]]; then
+            echo "::error::The audit job produced no result."
+            exit 1
+          fi
+          status=$(< "$AUDIT/status")
+          case $status in
+            skipped:*)
+              echo "**Security (pnpm audit):** not applicable, ${status#skipped: }." > "$out.tmp"
+              ;;
+            failed:*)
+              echo "**Security (pnpm audit):** check failed (${status#failed: }), see [the run]($run_url)." > "$out.tmp"
+              touch "$SECTIONS/10-security.failed"
+              ;;
+            ok)
+              count=$(jq '.advisories | length' "$AUDIT/audit.json")
+              if [[ $count == 0 ]]; then
+                echo "**Security (pnpm audit):** no known vulnerabilities in \`pnpm-lock.yaml\`." > "$out.tmp"
+              else
+                {
+                  echo "### Security (pnpm audit)"
+                  echo
+                  jq -r '.metadata.vulnerabilities | to_entries | map(select(.value > 0)) | map("\(.value) \(.key)") | join(", ")
+                    | "\(.) in `pnpm-lock.yaml`. A direct dependency is bumped in the catalog; a transitive one needs its parent updated, or a commented `overrides` entry in `pnpm-workspace.yaml`. Accepted findings go in `audit.ignore` there."' "$AUDIT/audit.json"
+                  echo
+                  echo "| Severity | Package | Vulnerable | Patched | Path | Advisory |"
+                  echo "| --- | --- | --- | --- | --- | --- |"
+                  # Paths look like `.>knip>zod` or `apps__playground>wrangler>sharp`.
+                  jq -r '
+                    def sev: {critical: 0, high: 1, moderate: 2, low: 3, info: 4}[.] // 5;
+                    def esc: tostring | gsub("\\|"; "\\|");
+                    def path:
+                      split(">") as $p
+                      | (if $p[0] == "." then "" else ($p[0] | gsub("__"; "/")) + ": " end)
+                      + ($p[1:] | join(" > "))
+                      + (if ($p | length) == 2 then " (direct)" else "" end);
+                    [.advisories[]] | sort_by((.severity | sev), .module_name) | .[]
+                    | ([.findings[].paths[]] | unique) as $paths
+                    | ([.findings[].version] | unique | join(", ")) as $found
+                    | "| \(.severity) | `\(.module_name | esc)` \($found | esc) | \(.vulnerable_versions // "?" | esc) | \(.patched_versions // "none" | esc) | \($paths[0] // "?" | path | esc)\(if ($paths | length) > 1 then " (+\($paths | length - 1) more)" else "" end) | [\(.github_advisory_id // .id)](\(.url)) |"
+                  ' "$AUDIT/audit.json"
+                } > "$out.tmp"
+              fi
+              ;;
+            *)
+              echo "::error::Unexpected audit status '$status'."
+              exit 1
+              ;;
+          esac
+          mv "$out.tmp" "$out"
+
+      - name: "Section: dependencies (catalog)"
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          test -f "$SRC/.ok"
+          out="$SECTIONS/20-catalog.md"
+          work="$RUNNER_TEMP/npm"
+          mkdir -p "$work"
+          if [[ ! -f $SRC/pnpm-workspace.yaml ]]; then
+            echo "**Dependencies:** not applicable, no \`pnpm-workspace.yaml\`." > "$out"
+            exit 0
+          fi
+          yq -o=json '.catalog // {}' "$SRC/pnpm-workspace.yaml" > "$work/catalog.json"
+          total=$(jq 'length' "$work/catalog.json")
+          if [[ $total == 0 ]]; then
+            echo "**Dependencies:** not applicable, no \`catalog:\` in \`pnpm-workspace.yaml\`." > "$out"
+            exit 0
+          fi
+          # `@types/node` is held to the `.nvmrc` major.
+          node_major=null
+          if [[ -f $SRC/.nvmrc ]]; then
+            nvmrc=$(tr -d '[:space:]' < "$SRC/.nvmrc")
+            nvmrc=${nvmrc#v}
+            if [[ $nvmrc =~ ^([0-9]+)\. ]]; then
+              node_major=${BASH_REMATCH[1]}
+            fi
+          fi
+
+          # Full packuments (they carry `time`), gzipped: a few MB each.
+          jq -r 'keys[]' "$work/catalog.json" | while IFS= read -r name; do
+            enc=${name//\//%2F}
+            printf 'url = "https://registry.npmjs.org/%s"\noutput = "%s/%s.json"\n' "$enc" "$work" "$enc"
+          done > "$work/urls.txt"
+          curl -fsSL --compressed --retry 3 --parallel --parallel-max 6 --config "$work/urls.txt"
+
+          cutoff=$(< "$SRC/cutoff")
+          : > "$work/rows.jsonl"
+          jq -r 'to_entries[] | "\(.key)\t\(.value | tostring)"' "$work/catalog.json" | while IFS=$'\t' read -r name spec; do
+            cur=${spec#[\^~]}
+            if [[ ! $cur =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              jq -nc --arg name "$name" --arg spec "$spec" '{name: $name, current: $spec, unparsed: true}' >> "$work/rows.jsonl"
+              continue
+            fi
+            maxmajor=null
+            if [[ $name == @types/node ]]; then
+              maxmajor=$node_major
+            fi
+            jq -c --arg name "$name" --arg cur "$cur" --argjson cutoff "$cutoff" --argjson maxmajor "$maxmajor" \
+              -f "$SRC/newer.jq" "$work/${name//\//%2F}.json" >> "$work/rows.jsonl"
+          done
+
+          # Rows are kept apart so the last step can truncate them.
+          rows="${out%.md}.rows"
+          jq -r '
+            select(.unparsed or .inMajor != null or .major != null)
+            | if .unparsed then "| `\(.name)` | `\(.current)` | not an exact version | | |"
+              else "| `\(.name)` | \(.current) | \(.inMajor // "") | \(.major // "") | \(.majorDate // .inMajorDate) |" end
+          ' "$work/rows.jsonl" > "$rows"
+          pending=$(wc -l < "$rows")
+          if [[ $pending == 0 ]]; then
+            rm "$rows"
+            echo "**Dependencies:** all $total catalog packages are up to date." > "$out"
+            exit 0
+          fi
+          {
+            echo "### Dependencies (\`catalog:\` in \`pnpm-workspace.yaml\`)"
+            echo
+            echo "$pending of $total packages have an update at least $MIN_AGE_DAYS days old. Minor and patch updates can share a PR; each major gets its own. \"Released\" is the date of the newest version shown."
+            if [[ $node_major != null ]] && jq -e 'has("@types/node")' "$work/catalog.json" > /dev/null; then
+              echo "\`@types/node\` is held to the \`.nvmrc\` major ($node_major)."
+            fi
+            echo
+            echo "| Package | Current | Latest in major | Latest major | Released |"
+            echo "| --- | --- | --- | --- | --- |"
+          } > "$out"
+
+      - name: "Section: pnpm"
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          test -f "$SRC/.ok"
+          out="$SECTIONS/30-pnpm.md"
+          if [[ ! -f $SRC/package.json ]]; then
+            echo "**pnpm:** not applicable, no \`package.json\`." > "$out"
+            exit 0
+          fi
+          pm=$(jq -r '.packageManager // ""' "$SRC/package.json")
+          if [[ ! $pm =~ ^pnpm@([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            echo "**pnpm:** not applicable, \`packageManager\` in \`package.json\` does not pin pnpm." > "$out"
+            exit 0
+          fi
+          cur=${BASH_REMATCH[1]}
+          curl -fsSL --compressed --retry 3 -o "$RUNNER_TEMP/pnpm.json" https://registry.npmjs.org/pnpm
+          newer=$(jq -c --arg name pnpm --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" --argjson maxmajor null \
+            -f "$SRC/newer.jq" "$RUNNER_TEMP/pnpm.json")
+          jq -r '
+            [ (if .inMajor then "\(.inMajor) on the same major (released \(.inMajorDate))" else empty end),
+              (if .major then "\(.major) on a newer major (released \(.majorDate))" else empty end) ] as $items
+            | if ($items | length) == 0 then "**pnpm** \(.current): up to date."
+              else "**pnpm** \(.current): \($items | join(", ")). Update with `pnpm self-update`, which also rewrites `packageManagerDependencies` in `pnpm-lock.yaml`." end
+          ' <<<"$newer" > "$out"
+
+      - name: "Section: gitleaks"
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          test -f "$SRC/.ok"
+          out="$SECTIONS/40-gitleaks.md"
+          if [[ -z $GITLEAKS_SCRIPT ]]; then
+            : > "$out"
+            exit 0
+          fi
+          if [[ ! -f $SRC/gitleaks-script ]]; then
+            echo "**gitleaks:** not applicable, \`$GITLEAKS_SCRIPT\` is not in the repo." > "$out"
+            exit 0
+          fi
+          cur=$(grep -oE '^GITLEAKS_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$SRC/gitleaks-script" | head -n 1 | cut -d '"' -f 2)
+          if [[ -z $cur ]]; then
+            echo "::error::$GITLEAKS_SCRIPT has no GITLEAKS_VERSION=\"x.y.z\" line."
+            exit 1
+          fi
+          newest=$(gh api "repos/gitleaks/gitleaks/releases?per_page=100" | jq -r --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" '
+            def ver: split(".") | map(tonumber);
+            ($cur | ver) as $c
+            | map(select((.draft or .prerelease) | not))
+            | map(.tag_name |= ltrimstr("v"))
+            | map(select(.tag_name | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")))
+            | map(select((.tag_name | ver) > $c and (.published_at | fromdateiso8601) <= $cutoff))
+            | max_by(.tag_name | ver)
+            | if . then "\(.tag_name) \(.published_at[0:10])" else "" end')
+          if [[ -z $newest ]]; then
+            echo "**gitleaks** $cur: up to date." > "$out"
+          else
+            read -r version date <<<"$newest"
+            echo "**gitleaks** $cur: $version available (released $date). Bump \`GITLEAKS_VERSION\` and \`GITLEAKS_DIGEST\` together in \`$GITLEAKS_SCRIPT\`." > "$out"
+          fi
+
+      - name: "Section: Node.js"
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          test -f "$SRC/.ok"
+          out="$SECTIONS/50-node.md"
+          if [[ ! -f $SRC/.nvmrc ]]; then
+            echo "**Node.js:** not applicable, no \`.nvmrc\`." > "$out"
+            exit 0
+          fi
+          cur=$(tr -d '[:space:]' < "$SRC/.nvmrc")
+          cur=${cur#v}
+          if [[ ! $cur =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::.nvmrc must hold an exact version such as 24.22.1, found '$cur'."
+            exit 1
+          fi
+          # Same rule as node-update.yml: security releases count right away.
+          target=$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json | jq -r --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" '
+            def ver: ltrimstr("v") | split(".") | map(tonumber);
+            ($cur | ver) as $c
+            | map(select((.version | ver) as $v | $v[0] == $c[0] and $v > $c))
+            | map(select(.security or ((.date + "T00:00:00Z" | fromdateiso8601) <= $cutoff)))
+            | max_by(.version | ver)
+            | if . then "\(.version | ltrimstr("v")) \(.date) \(.security)" else "" end')
+          if [[ -z $target ]]; then
+            echo "**Node.js** $cur: up to date." > "$out"
+          else
+            read -r version date security <<<"$target"
+            note="released $date"
+            if [[ $security == true ]]; then
+              note="security release, $date"
+            fi
+            echo "**Node.js** $cur: $version available ($note). \`node-update.yml\` opens that PR." > "$out"
+          fi
+
+      - name: Update the dashboard issue
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd "$SECTIONS"
+          run_url="$SERVER_URL/$REPO/actions/runs/$RUN_ID"
+          # `github.workflow_ref` is `owner/repo/.github/workflows/x.yml@ref`.
+          caller=${WORKFLOW_REF%@*}
+          caller=${caller#"$REPO/"}
+          runs_url="$SERVER_URL/$REPO/actions/workflows/${caller##*/}"
+
+          for section in 10-security 20-catalog 30-pnpm 40-gitleaks 50-node; do
+            name=${section#*-}
+            if [[ ! -f $section.md ]]; then
+              echo "::error::The $name check failed, see $run_url."
+              echo "**$name:** check failed, see [the run]($run_url)." > "$section.md"
+              touch "$section.failed"
+            fi
+          done
+
+          # The body with at most $1 catalog rows.
+          build() {
+            local keep=$1 file rows
+            echo "What needs attention in this repo, recomputed by the \`$caller\` workflow on every run. Edits by hand are overwritten. Updates themselves are made by hand, for example with the \`/pnpm-update\` and \`/dependabot-fix\` skills."
+            for file in [0-9][0-9]-*.md; do
+              [[ -s $file ]] || continue
+              echo
+              cat "$file"
+              rows="${file%.md}.rows"
+              if [[ -f $rows ]]; then
+                head -n "$keep" "$rows"
+                total=$(wc -l < "$rows")
+                if (( keep < total )); then
+                  echo "| … $(( total - keep )) more, see [the run summary]($run_url) | | | | |"
+                fi
+              fi
+            done
+          }
+
+          # Issue bodies are limited to 65,536 characters; the run summary
+          # always gets the full body.
+          limit=60000
+          keep=0
+          if [[ -f 20-catalog.rows ]]; then
+            keep=$(wc -l < 20-catalog.rows)
+          fi
+          content=$(build "$keep")
+          {
+            echo "$content"
+            echo
+            echo "---"
+            echo "Last run: $run_url"
+          } >> "$GITHUB_STEP_SUMMARY"
+          while (( ${#content} > limit )); do
+            if (( keep == 0 )); then
+              echo "::error::The body exceeds the issue size limit even without the catalog table."
+              exit 1
+            fi
+            next=$(( keep * limit / ${#content} ))
+            if (( next >= keep )); then
+              next=$(( keep - 1 ))
+            fi
+            keep=$next
+            content=$(build "$keep")
+          done
+
+          # The hash excludes the date, so an unchanged body is not re-saved.
+          hash=$(printf '%s' "$content" | sha256sum | cut -d ' ' -f 1)
+          marker="<!-- maintenance-dashboard:$hash -->"
+          {
+            echo "$content"
+            echo
+            echo "---"
+            echo "Last changed: $(date -u +%Y-%m-%d) · [Workflow runs]($runs_url)"
+            echo "$marker"
+          } > "$RUNNER_TEMP/body.md"
+
+          gh label create maintenance-dashboard --repo "$REPO" --force \
+            --color 1d76db --description "Kept up to date by the maintenance-dashboard workflow"
+          numbers=$(gh issue list --repo "$REPO" --label maintenance-dashboard --state open \
+            --json number --jq 'sort_by(.number) | .[].number')
+          if [[ -z $numbers ]]; then
+            url=$(gh issue create --repo "$REPO" --title "Maintenance dashboard" \
+              --label maintenance-dashboard --body-file "$RUNNER_TEMP/body.md")
+            echo "Created $url. Pin it in the repo's issue list."
+          else
+            number=${numbers%%$'\n'*}
+            if [[ $numbers == *$'\n'* ]]; then
+              echo "::warning::Several open issues carry the maintenance-dashboard label; editing #$number and leaving the rest."
+            fi
+            if gh issue view "$number" --repo "$REPO" --json body --jq .body | grep -qF "$marker"; then
+              echo "Issue #$number is unchanged."
+            else
+              gh issue edit "$number" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md" > /dev/null
+              echo "Updated issue #$number."
+            fi
+          fi
+
+          failed=(*.failed)
+          if (( ${#failed[@]} > 0 )); then
+            echo "::error::Checks failed: ${failed[*]%.failed}."
+            exit 1
+          fi
