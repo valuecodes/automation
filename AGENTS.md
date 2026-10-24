@@ -64,6 +64,12 @@ the two linters through `workflow-lint.yml`; its `ci` job is the check to requir
 - **External data is untrusted:** validate versions with a regex before using them, and escape
   anything that lands in Markdown.
 - **Every job** has `timeout-minutes`; jobs that write shared state have a `concurrency` group.
+- **Job names are check names.** A caller sees each job of a reusable workflow as
+  `<caller job> / <job name>`, and callers usually name their job after the file. So name jobs
+  after what they check or do (`actionlint`, `update-issue`), never after the workflow
+  (`workflow-lint / workflow-lint` says nothing), and give each tool its own job when that
+  lets a failed check name the cause. Renaming a job renames every caller's check and can
+  break their required-check settings: call it out in the PR and the release notes.
 
 ---
 
