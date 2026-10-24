@@ -116,7 +116,12 @@ jobs:
           SRC="$RUNNER_TEMP/src"
           SECTIONS="$RUNNER_TEMP/sections"
           AUDIT="$RUNNER_TEMP/audit"
-          printf 'SRC=%s\nSECTIONS=%s\nAUDIT=%s\n' "$SRC" "$SECTIONS" "$AUDIT" >> "$GITHUB_ENV"
+          # `github.workflow_ref` is `owner/repo/.github/workflows/x.yml@ref`. The
+          # body links the runs page, not a run, so an unchanged failure hashes the same.
+          caller=${WORKFLOW_REF%@*}
+          caller=${caller#"$REPO/"}
+          printf 'SRC=%s\nSECTIONS=%s\nAUDIT=%s\nCALLER=%s\nRUNS_URL=%s\n' \
+            "$SRC" "$SECTIONS" "$AUDIT" "$caller" "$SERVER_URL/$REPO/actions/workflows/${caller##*/}" >> "$GITHUB_ENV"
           mkdir -p "$SRC" "$SECTIONS"
           if [[ ! $MIN_AGE_DAYS =~ ^[0-9]+$ ]]; then
             echo "::error::min-release-age-days must be a whole number, got '$MIN_AGE_DAYS'."
@@ -172,7 +177,6 @@ jobs:
           set -euo pipefail
           test -f "$SRC/.ok"
           out="$SECTIONS/10-security.md"
-          run_url="$SERVER_URL/$REPO/actions/runs/$RUN_ID"
           if [[ ! -f $AUDIT/status ]]; then
             echo "::error::The audit job produced no result."
             exit 1
@@ -183,7 +187,7 @@ jobs:
               echo "**Security (pnpm audit):** not applicable, ${status#skipped: }." > "$out.tmp"
               ;;
             failed:*)
-              echo "**Security (pnpm audit):** check failed (${status#failed: }), see [the run]($run_url)." > "$out.tmp"
+              echo "**Security (pnpm audit):** check failed (${status#failed: }), see [the latest run]($RUNS_URL)." > "$out.tmp"
               touch "$SECTIONS/10-security.failed"
               ;;
             ok)
@@ -401,24 +405,20 @@ jobs:
           shopt -s nullglob
           cd "$SECTIONS"
           run_url="$SERVER_URL/$REPO/actions/runs/$RUN_ID"
-          # `github.workflow_ref` is `owner/repo/.github/workflows/x.yml@ref`.
-          caller=${WORKFLOW_REF%@*}
-          caller=${caller#"$REPO/"}
-          runs_url="$SERVER_URL/$REPO/actions/workflows/${caller##*/}"
 
           for section in 10-security 20-catalog 30-pnpm 40-gitleaks 50-node; do
             name=${section#*-}
             if [[ ! -f $section.md ]]; then
-              echo "::error::The $name check failed, see $run_url."
-              echo "**$name:** check failed, see [the run]($run_url)." > "$section.md"
+              echo "::error::The $name check failed."
+              echo "**$name:** check failed, see [the latest run]($RUNS_URL)." > "$section.md"
               touch "$section.failed"
             fi
           done
 
           # The body with at most $1 catalog rows.
           build() {
-            local keep=$1 file rows
-            echo "What needs attention in this repo, recomputed by the \`$caller\` workflow on every run. Edits by hand are overwritten. Updates themselves are made by hand, for example with the \`/pnpm-update\` and \`/dependabot-fix\` skills."
+            local keep=$1 file rows total
+            echo "What needs attention in this repo, recomputed by the \`$CALLER\` workflow on every run. Edits by hand are overwritten. Updates themselves are made by hand, for example with the \`/pnpm-update\` and \`/dependabot-fix\` skills."
             for file in [0-9][0-9]-*.md; do
               [[ -s $file ]] || continue
               echo
@@ -428,7 +428,7 @@ jobs:
                 head -n "$keep" "$rows"
                 total=$(wc -l < "$rows")
                 if (( keep < total )); then
-                  echo "| … $(( total - keep )) more, see [the run summary]($run_url) | | | | |"
+                  echo "| … $(( total - keep )) more, see [the latest run's summary]($RUNS_URL) | | | | |"
                 fi
               fi
             done
@@ -468,7 +468,7 @@ jobs:
             echo "$content"
             echo
             echo "---"
-            echo "Last changed: $(date -u +%Y-%m-%d) · [Workflow runs]($runs_url)"
+            echo "Last changed: $(date -u +%Y-%m-%d) · [Workflow runs]($RUNS_URL)"
             echo "$marker"
           } > "$RUNNER_TEMP/body.md"
 
@@ -485,7 +485,9 @@ jobs:
             if [[ $numbers == *$'\n'* ]]; then
               echo "::warning::Several open issues carry the maintenance-dashboard label; editing #$number and leaving the rest."
             fi
-            if gh issue view "$number" --repo "$REPO" --json body --jq .body | grep -qF "$marker"; then
+            # Unchanged means the same content and marker, so a hand edit is overwritten.
+            existing=$(gh issue view "$number" --repo "$REPO" --json body --jq .body | tr -d '\r')
+            if [[ $existing == "$content"$'\n\n---\nLast changed: '*"$marker" ]]; then
               echo "Issue #$number is unchanged."
             else
               gh issue edit "$number" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md" > /dev/null

@@ -76,6 +76,22 @@ The `audit` job checks out the repo to run `pnpm audit` from the lockfile alone 
 `GITHUB_TOKEN`. A broken check makes the run red and shows "check failed" in its section; the
 other sections still render.
 
+### How a run decides
+
+```mermaid
+flowchart TD
+    A[audit job: check out, run pnpm audit from the lockfile] --> B[dashboard job: read the catalog, packageManager,<br>.nvmrc and the gitleaks script through the API]
+    B --> C[One step per section: npm registry, GitHub releases,<br>nodejs.org index, audit result]
+    C -- a step fails --> C2[Its section says check failed;<br>the run goes red at the end]
+    C --> D[Build the body and hash the content]
+    C2 --> D
+    D --> E{Open issue with the label?}
+    E -- none --> F[Create it]
+    E -- one --> G{Hash marker unchanged?}
+    G -- yes --> Z[Skip the edit]
+    G -- no --> H[Edit the body]
+```
+
 ### Setup in the calling repo
 
 1. Add the caller below. The caller job must grant `contents: read` and `issues: write` itself.
