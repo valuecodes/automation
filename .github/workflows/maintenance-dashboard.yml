@@ -533,7 +533,7 @@ jobs:
           | .versions[$target] as $t
           | .versions[$cur] as $c
           | ($time[$target] | stamp) as $tt
-          | ([$time | to_entries[] | select(.key != "created" and .key != "modified") | .value | stamp | select(. < $tt)] | max) as $prev
+          | ([$time | to_entries[] | select(.key | test("^[0-9]+\\.")) | .value | strings | stamp | select(. < $tt)] | max) as $prev
           | who($target) as $pub
           | who($cur) as $curpub
           | [ (if $c.dist.attestations != null and $t.dist.attestations == null then "provenance dropped" else empty end),
@@ -574,13 +574,13 @@ jobs:
 
           if (( hits > 0 )); then
             names=$(jq -r '.name' "$work/hits.jsonl" | sort -u | head -n 3 | paste -sd ',' | sed 's/,/, /g')
-            printf 'alert\t%s malicious\t%s\n' "$hits" "${names//|/\\|}" > "$status_file.tmp"
+            printf 'alert\t%s\t%s\n' "$(plural "$hits" "malicious package")" "${names//|/\\|}" > "$status_file.tmp"
           elif (( flagged > 0 )); then
-            printf 'warn\t%s of %s updates have signals\tsee Supply chain\n' "$flagged" "$candidates" > "$status_file.tmp"
+            printf 'warn\t%s of %s with signals\tsee Supply chain\n' "$flagged" "$(plural "$candidates" "update")" > "$status_file.tmp"
           elif [[ -z $coverage ]]; then
             printf 'na\tnot applicable\t%s\n' "$lock_note" > "$status_file.tmp"
           else
-            printf 'ok\tno findings\t%s checked\n' "${coverage:-0 packages}" > "$status_file.tmp"
+            printf 'ok\tno findings\t%s checked\n' "$coverage" > "$status_file.tmp"
           fi
           mv "$out.tmp" "$out"
           mv "$status_file.tmp" "$status_file"
@@ -804,7 +804,7 @@ jobs:
               IFS=$'\t' read -r state text details < 15-supply-chain.status
               if [[ $state == alert ]]; then
                 echo "> [!CAUTION]"
-                echo "> $text package(s) ($details) in \`pnpm-lock.yaml\` or among the update candidates, see Supply chain below."
+                echo "> $text ($details) in \`pnpm-lock.yaml\` or among the update candidates, see Supply chain below."
                 echo
               fi
             fi
