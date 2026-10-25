@@ -437,6 +437,9 @@ jobs:
           shopt -s nullglob
           cd "$SECTIONS"
           run_url="$SERVER_URL/$REPO/actions/runs/$RUN_ID"
+          # The caller's repo holds only a `uses:` line, so point readers at the
+          # repo whose README explains the dashboard.
+          source_link=" · Source: [valuecodes/automation](https://github.com/valuecodes/automation)"
 
           for section in 10-security 20-catalog 30-pnpm 40-gitleaks 50-node; do
             name=${section#*-}
@@ -478,7 +481,7 @@ jobs:
             echo "$content"
             echo
             echo "---"
-            echo "Last run: $run_url"
+            echo "Last run: $run_url$source_link"
           } >> "$GITHUB_STEP_SUMMARY"
           while (( ${#content} > limit )); do
             if (( keep == 0 )); then
@@ -500,14 +503,14 @@ jobs:
             echo "$content"
             echo
             echo "---"
-            echo "Last changed: $(date -u +%Y-%m-%d) · [Workflow runs]($RUNS_URL)"
+            echo "Last changed: $(date -u +%Y-%m-%d) · [Workflow runs]($RUNS_URL)$source_link"
             echo "$marker"
           } > "$RUNNER_TEMP/body.md"
 
           publish() {
             local numbers number url existing
             gh label create maintenance-dashboard --repo "$REPO" --force \
-              --color 1d76db --description "Kept up to date by the maintenance-dashboard workflow"
+              --color 1d76db --description "Kept up to date by the maintenance-dashboard workflow (valuecodes/automation)"
             numbers=$(gh issue list --repo "$REPO" --label maintenance-dashboard --state open \
               --json number --jq 'sort_by(.number) | .[].number')
             if [[ -z $numbers ]]; then
@@ -520,9 +523,10 @@ jobs:
             if [[ $numbers == *$'\n'* ]]; then
               echo "::warning::Several open issues carry the maintenance-dashboard label; editing #$number and leaving the rest."
             fi
-            # Unchanged means the same content and marker, so a hand edit is overwritten.
+            # Unchanged means the same content, source link and marker, so a hand
+            # edit is overwritten and an issue from before the link gains it once.
             existing=$(gh issue view "$number" --repo "$REPO" --json body --jq .body | tr -d '\r')
-            if [[ $existing == "$content"$'\n\n---\nLast changed: '*"$marker" ]]; then
+            if [[ $existing == "$content"$'\n\n---\nLast changed: '*"$source_link"$'\n'"$marker" ]]; then
               echo "Issue #$number is unchanged."
             else
               gh issue edit "$number" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md" > /dev/null
