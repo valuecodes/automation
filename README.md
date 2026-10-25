@@ -20,6 +20,12 @@ end-of-life date from the [release schedule](https://github.com/nodejs/Release),
 LTS major when there is one: "Node.js 22 is in maintenance, end of life 2027-04-30; Node.js 24 is
 Active LTS."
 
+The body opens with a summary table, one row per check with its state (✅ up to date, ⬆️ update
+available, ⚠️ needs attention, 🔴 vulnerabilities found, ⚪ not applicable, ❌ check failed). An
+alert box above it calls out `pnpm audit` findings, failed checks, and a Node.js security release
+or end of life. The sections with the details follow: the security table marks each severity
+(🟥 critical, 🟧 high, 🟨 moderate, ⬜ low) and the dependency table marks a new major with ⚠️.
+
 The workflow never changes code: no PRs, no commits. Doing the updates stays manual. Every run
 recomputes the whole body and edits the issue only when the content changed, so the edit history
 shows real changes. Editing an issue body notifies nobody; urgent security findings still arrive
@@ -39,7 +45,7 @@ flowchart TD
     A[audit job: check out, run pnpm audit from the lockfile] --> B[update-issue job: read the catalog, packageManager,<br>.nvmrc and the gitleaks script through the API]
     B --> C[One step per section: npm registry, GitHub releases,<br>nodejs.org index, audit result]
     C -- a step fails --> C2[Its section says check failed;<br>the run goes red at the end]
-    C --> D[Build the body and hash the content]
+    C --> D[Build the alerts, summary table and sections;<br>hash the content]
     C2 --> D
     D --> DR{dry-run?}
     DR -- yes --> Z2[Body in the run summary only]
