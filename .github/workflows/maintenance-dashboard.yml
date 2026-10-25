@@ -112,8 +112,11 @@ jobs:
           name: maintenance-dashboard-audit
           path: ${{ runner.temp }}/audit
 
-      # Each section step writes `$SECTIONS/NN-name.md` and never stops the
-      # others; the last step treats a missing fragment as a failed check.
+      # Each section step writes `$SECTIONS/NN-name.md` and, last, a one-line
+      # `NN-name.status` (`state<TAB>status<TAB>details`, state one of ok, na,
+      # update, warn, alert, failed) for the summary table. A step never stops
+      # the others; the last step treats a missing fragment or status as a
+      # failed check.
       - name: Read the repo files at this commit
         continue-on-error: true
         run: |
@@ -182,6 +185,7 @@ jobs:
           set -euo pipefail
           test -f "$SRC/.ok"
           out="$SECTIONS/10-security.md"
+          status_file="$SECTIONS/10-security.status"
           if [[ ! -f $AUDIT/status ]]; then
             echo "::error::The audit job produced no result."
             exit 1
@@ -190,27 +194,40 @@ jobs:
           case $status in
             skipped:*)
               echo "**Security (pnpm audit):** not applicable, ${status#skipped: }." > "$out.tmp"
+              printf 'na\tnot applicable\t%s\n' "${status#skipped: }" > "$status_file.tmp"
               ;;
             failed:*)
               echo "**Security (pnpm audit):** check failed (${status#failed: }), see [the latest run]($RUNS_URL)." > "$out.tmp"
+              printf 'failed\tcheck failed\t%s\n' "${status#failed: }" > "$status_file.tmp"
               touch "$SECTIONS/10-security.failed"
               ;;
             ok)
               count=$(jq '.advisories | length' "$AUDIT/audit.json")
               if [[ $count == 0 ]]; then
                 echo "**Security (pnpm audit):** no known vulnerabilities in \`pnpm-lock.yaml\`." > "$out.tmp"
+                printf 'ok\tno known vulnerabilities\t\n' > "$status_file.tmp"
               else
+                # One advisory can hit several paths, so every count here comes
+                # from the advisories, not from `.metadata.vulnerabilities`.
+                breakdown=$(jq -r '
+                  def sev: {critical: 0, high: 1, moderate: 2, low: 3, info: 4}[.] // 5;
+                  [.advisories[].severity] | group_by(.) | sort_by(.[0] | sev)
+                  | map("\(length) \(.[0] | tostring | gsub("\\|"; "\\|"))") | join(", ")' "$AUDIT/audit.json")
+                noun=vulnerabilities
+                if (( count == 1 )); then
+                  noun=vulnerability
+                fi
                 {
                   echo "### Security (pnpm audit)"
                   echo
-                  jq -r '.metadata.vulnerabilities | to_entries | map(select(.value > 0)) | map("\(.value) \(.key)") | join(", ")
-                    | "\(.) in `pnpm-lock.yaml`."' "$AUDIT/audit.json"
+                  echo "$count $noun ($breakdown) in \`pnpm-lock.yaml\`."
                   echo
                   echo "| Severity | Package | Vulnerable | Patched | Path | Advisory |"
                   echo "| --- | --- | --- | --- | --- | --- |"
                   # Paths look like `.>knip>zod` or `apps__playground>wrangler>sharp`.
                   jq -r '
                     def sev: {critical: 0, high: 1, moderate: 2, low: 3, info: 4}[.] // 5;
+                    def mark: {critical: "🟥", high: "🟧", moderate: "🟨", low: "⬜", info: "⬜"}[.] // "⬜";
                     def esc: tostring | gsub("\\|"; "\\|");
                     def path:
                       split(">") as $p
@@ -220,9 +237,10 @@ jobs:
                     [.advisories[]] | sort_by((.severity | sev), .module_name) | .[]
                     | ([.findings[].paths[]] | unique) as $paths
                     | ([.findings[].version] | unique | join(", ")) as $found
-                    | "| \(.severity) | `\(.module_name | esc)` \($found | esc) | \(.vulnerable_versions // "?" | esc) | \(.patched_versions // "none" | esc) | \($paths[0] // "?" | path | esc)\(if ($paths | length) > 1 then " (+\($paths | length - 1) more)" else "" end) | [\(.github_advisory_id // .id)](\(.url)) |"
+                    | "| \(.severity | mark) \(.severity | esc) | `\(.module_name | esc)` \($found | esc) | \(.vulnerable_versions // "?" | esc) | \(.patched_versions // "none" | esc) | \($paths[0] // "?" | path | esc)\(if ($paths | length) > 1 then " (+\($paths | length - 1) more)" else "" end) | [\(.github_advisory_id // .id)](\(.url)) |"
                   ' "$AUDIT/audit.json"
                 } > "$out.tmp"
+                printf 'alert\t%s\t%s\n' "$count $noun" "$breakdown" > "$status_file.tmp"
               fi
               ;;
             *)
@@ -231,6 +249,7 @@ jobs:
               ;;
           esac
           mv "$out.tmp" "$out"
+          mv "$status_file.tmp" "$status_file"
 
       - name: "Section: dependencies (catalog)"
         continue-on-error: true
@@ -238,16 +257,19 @@ jobs:
           set -euo pipefail
           test -f "$SRC/.ok"
           out="$SECTIONS/20-catalog.md"
+          status_file="$SECTIONS/20-catalog.status"
           work="$RUNNER_TEMP/npm"
           mkdir -p "$work"
           if [[ ! -f $SRC/pnpm-workspace.yaml ]]; then
             echo "**Dependencies:** not applicable, no \`pnpm-workspace.yaml\`." > "$out"
+            printf 'na\tnot applicable\tno pnpm-workspace.yaml\n' > "$status_file"
             exit 0
           fi
           yq -o=json '.catalog // {}' "$SRC/pnpm-workspace.yaml" > "$work/catalog.json"
           total=$(jq 'length' "$work/catalog.json")
           if [[ $total == 0 ]]; then
             echo "**Dependencies:** not applicable, no \`catalog:\` in \`pnpm-workspace.yaml\`." > "$out"
+            printf 'na\tnot applicable\tno catalog in pnpm-workspace.yaml\n' > "$status_file"
             exit 0
           fi
           # `@types/node` is capped at the `.nvmrc` major.
@@ -288,18 +310,43 @@ jobs:
           jq -r '
             select(.unparsed or .inMajor != null or .major != null)
             | if .unparsed then "| `\(.name)` | `\(.current)` | not an exact version | | |"
-              else "| `\(.name)` | \(.current) | \(.inMajor // "") | \(.major // "") | \(.majorDate // .inMajorDate) |" end
+              else "| `\(.name)` | \(.current) | \(.inMajor // "") | \(if .major then "⚠️ \(.major)" else "" end) | \(.majorDate // .inMajorDate) |" end
           ' "$work/rows.jsonl" > "$rows"
-          pending=$(wc -l < "$rows")
-          if [[ $pending == 0 ]]; then
+          outdated=$(jq -s 'map(select(.inMajor != null or .major != null)) | length' "$work/rows.jsonl")
+          majors=$(jq -s 'map(select(.major != null)) | length' "$work/rows.jsonl")
+          unparsed=$(jq -s 'map(select(.unparsed)) | length' "$work/rows.jsonl")
+          if (( outdated + unparsed == 0 )); then
             rm "$rows"
             echo "**Dependencies:** all $total catalog packages are up to date." > "$out"
+            noun=packages
+            if (( total == 1 )); then
+              noun=package
+            fi
+            printf 'ok\tup to date\t%s catalog %s\n' "$total" "$noun" > "$status_file"
             exit 0
+          fi
+          plural() {
+            if (( $1 == 1 )); then echo "$1 $2"; else echo "$1 ${2}s"; fi
+          }
+          details=""
+          if (( majors > 0 )); then
+            details=$(plural "$majors" "new major")
+          fi
+          if (( unparsed > 0 )); then
+            details="${details:+$details, }$unparsed not an exact version"
           fi
           {
             echo "### Dependencies (\`catalog:\` in \`pnpm-workspace.yaml\`)"
             echo
-            echo "$pending of $total packages have an update at least $MIN_AGE_DAYS days old."
+            echo "$outdated of $total packages have an update at least $MIN_AGE_DAYS days old."
+            if (( majors > 0 )); then
+              echo "⚠️ marks a new major."
+            fi
+            if (( unparsed == 1 )); then
+              echo "1 entry is not an exact version and was not checked."
+            elif (( unparsed > 1 )); then
+              echo "$unparsed entries are not exact versions and were not checked."
+            fi
             if [[ $node_major != null ]] && jq -e 'has("@types/node")' "$work/catalog.json" > /dev/null; then
               echo "\`@types/node\` is capped at the \`.nvmrc\` major ($node_major)."
             fi
@@ -307,6 +354,11 @@ jobs:
             echo "| Package | Current | Latest in major | Latest major | Released |"
             echo "| --- | --- | --- | --- | --- |"
           } > "$out"
+          if (( outdated > 0 )); then
+            printf 'update\t%s of %s outdated\t%s\n' "$outdated" "$total" "$details" > "$status_file"
+          else
+            printf 'warn\t%s not an exact version\t\n' "$unparsed" > "$status_file"
+          fi
 
       - name: "Section: pnpm"
         continue-on-error: true
@@ -314,13 +366,16 @@ jobs:
           set -euo pipefail
           test -f "$SRC/.ok"
           out="$SECTIONS/30-pnpm.md"
+          status_file="$SECTIONS/30-pnpm.status"
           if [[ ! -f $SRC/package.json ]]; then
             echo "**pnpm:** not applicable, no \`package.json\`." > "$out"
+            printf 'na\tnot applicable\tno package.json\n' > "$status_file"
             exit 0
           fi
           pm=$(jq -r '.packageManager // ""' "$SRC/package.json")
           if [[ ! $pm =~ ^pnpm@([0-9]+\.[0-9]+\.[0-9]+) ]]; then
             echo "**pnpm:** not applicable, \`packageManager\` in \`package.json\` does not pin pnpm." > "$out"
+            printf 'na\tnot applicable\tpackageManager does not pin pnpm\n' > "$status_file"
             exit 0
           fi
           cur=${BASH_REMATCH[1]}
@@ -333,6 +388,10 @@ jobs:
             | if ($items | length) == 0 then "**pnpm** \(.current): up to date."
               else "**pnpm** \(.current): \($items | join(", ")) available." end
           ' <<<"$newer" > "$out"
+          jq -r '
+            if .inMajor == null and .major == null then "ok\tup to date\t\(.current)"
+            else "update\t\(.inMajor // .major) available\t\(.current) → \(.inMajor // .major)\(if .inMajor and .major then ", new major \(.major)" else "" end)" end
+          ' <<<"$newer" > "$status_file"
 
       - name: "Section: gitleaks"
         continue-on-error: true
@@ -340,12 +399,15 @@ jobs:
           set -euo pipefail
           test -f "$SRC/.ok"
           out="$SECTIONS/40-gitleaks.md"
+          status_file="$SECTIONS/40-gitleaks.status"
+          # Disabled: an empty fragment and no status, so the check has no row.
           if [[ -z $GITLEAKS_SCRIPT ]]; then
             : > "$out"
             exit 0
           fi
           if [[ ! -f $SRC/gitleaks-script ]]; then
             echo "**gitleaks:** not applicable, \`$GITLEAKS_SCRIPT\` is not in the repo." > "$out"
+            printf 'na\tnot applicable\t%s is not in the repo\n' "${GITLEAKS_SCRIPT//|/\\|}" > "$status_file"
             exit 0
           fi
           cur=$(grep -oE '^GITLEAKS_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$SRC/gitleaks-script" | head -n 1 | cut -d '"' -f 2)
@@ -364,9 +426,11 @@ jobs:
             | if . then "\(.tag_name) \(.published_at[0:10])" else "" end')
           if [[ -z $newest ]]; then
             echo "**gitleaks** $cur: up to date." > "$out"
+            printf 'ok\tup to date\t%s\n' "$cur" > "$status_file"
           else
             read -r version date <<<"$newest"
             echo "**gitleaks** $cur: $version ($date) available." > "$out"
+            printf 'update\t%s available\t%s → %s\n' "$version" "$cur" "$version" > "$status_file"
           fi
 
       - name: "Section: Node.js"
@@ -375,8 +439,10 @@ jobs:
           set -euo pipefail
           test -f "$SRC/.ok"
           out="$SECTIONS/50-node.md"
+          status_file="$SECTIONS/50-node.status"
           if [[ ! -f $SRC/.nvmrc ]]; then
             echo "**Node.js:** not applicable, no \`.nvmrc\`." > "$out"
+            printf 'na\tnot applicable\tno .nvmrc\n' > "$status_file"
             exit 0
           fi
           cur=$(tr -d '[:space:]' < "$SRC/.nvmrc")
@@ -399,18 +465,27 @@ jobs:
               else "" end')
           if [[ -z $target ]]; then
             status="up to date."
+            state=ok
+            summary="up to date"
+            details=$cur
           else
             read -r version date security <<<"$target"
             note=$date
+            state=update
+            summary="$version available"
+            details="$cur → $version"
             if [[ $security == true ]]; then
               note="$date, includes a security release"
+              state=warn
+              summary="security release $version"
             fi
             status="$version ($note) available."
           fi
 
           # The update above stays on the `.nvmrc` major, so say where that major
-          # is in its lifecycle and name a newer LTS major if there is one.
-          lifecycle=$(curl -fsSL --retry 3 https://raw.githubusercontent.com/nodejs/Release/main/schedule.json |
+          # is in its lifecycle and name a newer LTS major if there is one. The
+          # first two fields (phase word, end date) feed the summary row.
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/nodejs/Release/main/schedule.json |
             jq -r --argjson major "${cur%%.*}" --arg today "$(date -u +%F)" '
             def phase:
               if $today >= .end then "past end of life"
@@ -422,14 +497,27 @@ jobs:
                 | map(select(.key | test("^v[0-9]+$")) | .value + {major: (.key[1:] | tonumber)})
                 | map(select(.lts and .lts <= $today and $today < .end))
                 | max_by(.major) ) as $lts
-            | if $s == null then "Node.js \($major) is not in the release schedule."
-              else
-                (if $today >= $s.end then "Node.js \($major) reached end of life on \($s.end)"
-                 else "Node.js \($major) is \($s | phase), end of life \($s.end)" end)
-                + (if $lts and $lts.major > $major then "; Node.js \($lts.major) is \($lts | phase)" else "" end)
-                + "."
-              end')
+            | (if $s == null then "unknown" elif $today >= $s.end then "eol" else "supported" end)
+              + "\t\($s.end // "-")\t"
+              + if $s == null then "Node.js \($major) is not in the release schedule."
+                else
+                  (if $today >= $s.end then "Node.js \($major) reached end of life on \($s.end)"
+                   else "Node.js \($major) is \($s | phase), end of life \($s.end)" end)
+                  + (if $lts and $lts.major > $major then "; Node.js \($lts.major) is \($lts | phase)" else "" end)
+                  + "."
+                end' > "$RUNNER_TEMP/node-lifecycle"
+          IFS=$'\t' read -r phase end lifecycle < "$RUNNER_TEMP/node-lifecycle"
+          if [[ $phase == eol ]]; then
+            if [[ $state == warn ]]; then
+              summary="past end of life, $summary"
+            else
+              summary="past end of life"
+            fi
+            state=warn
+            details="$details, end of life $end"
+          fi
           echo "**Node.js** $cur: $status $lifecycle" > "$out"
+          printf '%s\t%s\t%s\n' "$state" "$summary" "$details" > "$status_file"
 
       - name: Update the dashboard issue
         run: |
@@ -441,19 +529,94 @@ jobs:
           # repo whose README explains the dashboard.
           source_link=" · Source: [valuecodes/automation](https://github.com/valuecodes/automation)"
 
+          # An empty fragment with no status is a disabled check. A fragment
+          # without a valid status means its step died halfway, so it counts as
+          # failed too.
           for section in 10-security 20-catalog 30-pnpm 40-gitleaks 50-node; do
             name=${section#*-}
-            if [[ ! -f $section.md ]]; then
-              echo "::error::The $name check failed."
-              echo "**$name:** check failed, see [the latest run]($RUNS_URL)." > "$section.md"
-              touch "$section.failed"
+            if [[ -f $section.md && ! -s $section.md && ! -f $section.status ]]; then
+              continue
             fi
+            state=""
+            if [[ -f $section.md && -f $section.status ]]; then
+              state=$(cut -f 1 "$section.status")
+            fi
+            case $state in
+              ok|na|update|warn|alert|failed) continue ;;
+            esac
+            echo "::error::The $name check failed."
+            echo "**$name:** check failed, see [the latest run]($RUNS_URL)." > "$section.md"
+            printf 'failed\tcheck failed\t\n' > "$section.status"
+            touch "$section.failed"
           done
+
+          check_name() {
+            case $1 in
+              security) echo Security ;;
+              catalog) echo Dependencies ;;
+              node) echo Node.js ;;
+              *) echo "$1" ;;
+            esac
+          }
+          # The one place that pairs a state with its emoji; each sits next to a word.
+          icon() {
+            case $1 in
+              ok) echo "✅" ;;
+              na) echo "⚪" ;;
+              update) echo "⬆️" ;;
+              warn) echo "⚠️" ;;
+              alert) echo "🔴" ;;
+              *) echo "❌" ;;
+            esac
+          }
+
+          # Alert blocks for what needs action; nothing when there is nothing to say.
+          alerts() {
+            local state text details file failed=() node_warning=""
+            if [[ -f 10-security.status ]]; then
+              IFS=$'\t' read -r state text details < 10-security.status
+              if [[ $state == alert ]]; then
+                echo "> [!CAUTION]"
+                echo "> $text ($details) in \`pnpm-lock.yaml\`, see Security below."
+                echo
+              fi
+            fi
+            for file in *.failed; do
+              file=${file%.failed}
+              failed+=("${file#*-}")
+            done
+            if [[ -f 50-node.status ]]; then
+              IFS=$'\t' read -r state text details < 50-node.status
+              if [[ $state == warn ]]; then
+                node_warning="Node.js: $text ($details), see Node.js below."
+              fi
+            fi
+            if (( ${#failed[@]} > 0 )) || [[ -n $node_warning ]]; then
+              echo "> [!WARNING]"
+              if (( ${#failed[@]} > 0 )); then
+                text=$(printf '%s, ' "${failed[@]}")
+                echo "> Checks failed: ${text%, }. See [the latest run]($RUNS_URL)."
+              fi
+              if [[ -n $node_warning ]]; then
+                echo "> $node_warning"
+              fi
+              echo
+            fi
+          }
 
           # The body with at most $1 catalog rows.
           build() {
-            local keep=$1 file rows total
+            local keep=$1 file rows total state text details
             echo "Generated by the \`$CALLER\` workflow; manual edits are overwritten."
+            echo
+            alerts
+            echo "| Check | Status | Details |"
+            echo "| --- | --- | --- |"
+            for file in [0-9][0-9]-*.status; do
+              IFS=$'\t' read -r state text details < "$file"
+              file=${file%.status}
+              echo "| $(check_name "${file#*-}") | $(icon "$state") ${text//|/\\|} | ${details//|/\\|} |"
+            done
             for file in [0-9][0-9]-*.md; do
               [[ -s $file ]] || continue
               echo
