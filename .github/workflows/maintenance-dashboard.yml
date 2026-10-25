@@ -407,7 +407,7 @@ jobs:
           fi
           if [[ ! -f $SRC/gitleaks-script ]]; then
             echo "**gitleaks:** not applicable, \`$GITLEAKS_SCRIPT\` is not in the repo." > "$out"
-            printf 'na\tnot applicable\t%s is not in the repo\n' "${GITLEAKS_SCRIPT//|/\\|}" > "$status_file"
+            printf 'na\tnot applicable\t%s is not in the repo\n' "$GITLEAKS_SCRIPT" > "$status_file"
             exit 0
           fi
           cur=$(grep -oE '^GITLEAKS_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$SRC/gitleaks-script" | head -n 1 | cut -d '"' -f 2)
@@ -477,7 +477,7 @@ jobs:
             if [[ $security == true ]]; then
               note="$date, includes a security release"
               state=warn
-              summary="security release $version"
+              summary="$version available, includes a security release"
             fi
             status="$version ($note) available."
           fi
@@ -547,6 +547,7 @@ jobs:
             echo "::error::The $name check failed."
             echo "**$name:** check failed, see [the latest run]($RUNS_URL)." > "$section.md"
             printf 'failed\tcheck failed\t\n' > "$section.status"
+            rm -f "$section.rows"
             touch "$section.failed"
           done
 
@@ -583,7 +584,7 @@ jobs:
             fi
             for file in *.failed; do
               file=${file%.failed}
-              failed+=("${file#*-}")
+              failed+=("$(check_name "${file#*-}")")
             done
             if [[ -f 50-node.status ]]; then
               IFS=$'\t' read -r state text details < 50-node.status
@@ -598,6 +599,10 @@ jobs:
                 echo "> Checks failed: ${text%, }. See [the latest run]($RUNS_URL)."
               fi
               if [[ -n $node_warning ]]; then
+                # A bare `>` line keeps the two warnings in separate paragraphs.
+                if (( ${#failed[@]} > 0 )); then
+                  echo ">"
+                fi
                 echo "> $node_warning"
               fi
               echo
