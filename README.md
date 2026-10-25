@@ -15,15 +15,25 @@ and `pnpm audit` findings. Like pnpm's `minimumReleaseAge`, a release is listed 
 `min-release-age-days` old (default 14); prereleases never are. A check whose source file is
 missing shows as "not applicable".
 
+A supply chain section adds two checks that need no token. Every version in `pnpm-lock.yaml`,
+plus each update the dependency table lists, is looked up on [osv.dev](https://osv.dev), which
+carries the OpenSSF [malicious-packages](https://github.com/ossf/malicious-packages) feed that
+`pnpm audit` does not see; git and tarball dependencies have no registry version and are only
+counted. A hit is an incident, so it also makes the run red, the one notification the workflow
+can send. For each listed update the npm registry data is read for signs of a hijacked account:
+provenance attestations dropped since the version in use, a different publisher, a publisher
+who is not a maintainer, or the first release after more than a year. Missing provenance alone
+is not reported, since most of npm has none.
+
 Node.js updates stay on the `.nvmrc` major, so the Node.js line also gives that major's phase and
 end-of-life date from the [release schedule](https://github.com/nodejs/Release), and names a newer
 LTS major when there is one: "Node.js 22 is in maintenance, end of life 2027-04-30; Node.js 24 is
 Active LTS."
 
 The body opens with a summary table, one row per check with its state (✅ up to date, ⬆️ update
-available, ⚠️ needs attention, 🔴 vulnerabilities found, ⚪ not applicable, ❌ check failed). An
-alert box above it calls out `pnpm audit` findings, failed checks, and a Node.js security release
-or end of life. The sections with the details follow: the security table marks each severity
+available, ⚠️ needs attention, 🔴 vulnerabilities or malicious packages found, ⚪ not applicable,
+❌ check failed). An alert box above it calls out malicious packages, `pnpm audit` findings, failed
+checks, and a Node.js security release or end of life. The sections with the details follow: the security table marks each severity
 (🟥 critical, 🟧 high, 🟨 moderate, ⬜ low) and the dependency table marks a new major with ⚠️.
 
 The workflow never changes code: no PRs, no commits. Doing the updates stays manual. Every run
@@ -34,16 +44,16 @@ cooldown, and flagged when any release in the range is one) only shows up here. 
 the issue, the next run creates a new one.
 
 The `audit` job checks out the repo to run `pnpm audit` from the lockfile alone (no install, and
-`--ignore-pnpmfile` so no repo code runs). Everything else is read through the REST API with
-`GITHUB_TOKEN`. A broken check makes the run red and shows "check failed" in its section; the
+`--ignore-pnpmfile` so no repo code runs) and to list the locked packages for the osv.dev check.
+Everything else is read through the REST API with `GITHUB_TOKEN`. A broken check makes the run red and shows "check failed" in its section; the
 other sections still render.
 
 ### How a run decides
 
 ```mermaid
 flowchart TD
-    A[audit job: check out, run pnpm audit from the lockfile] --> B[update-issue job: read the catalog, packageManager,<br>.nvmrc and the gitleaks script through the API]
-    B --> C[One step per section: npm registry, GitHub releases,<br>nodejs.org index, audit result]
+    A[audit job: check out, run pnpm audit from the lockfile,<br>list the locked packages] --> B[update-issue job: read the catalog, packageManager,<br>.nvmrc and the gitleaks script through the API]
+    B --> C[One step per section: npm registry, osv.dev, GitHub releases,<br>nodejs.org index, audit result]
     C -- a step fails --> C2[Its section says check failed;<br>the run goes red at the end]
     C --> D[Build the alerts, summary table and sections;<br>hash the content]
     C2 --> D
