@@ -1,11 +1,12 @@
 name: Maintenance dashboard
 
 # Keeps one issue per repo (label `maintenance-dashboard`) listing pending
-# updates: the `catalog:` in `pnpm-workspace.yaml`, pnpm, gitleaks, Node.js and
-# `pnpm audit` findings. The body is recomputed every run and edited only when
-# it changed. No PRs, no commits; updates stay manual. Uses only `GITHUB_TOKEN`:
-# files are read through the REST API, and `pnpm audit` runs from the lockfile
-# without installing. Other repos call it with
+# updates: the `catalog:` in `pnpm-workspace.yaml`, pnpm, gitleaks, Node.js,
+# `pnpm audit` findings, osv.dev malicious-package hits and update signals. The
+# body is recomputed every run and edited only when it changed. No PRs, no
+# commits; updates stay manual. Uses only `GITHUB_TOKEN`: files are read
+# through the REST API, and `pnpm audit` runs from the lockfile without
+# installing. Other repos call it with
 # `uses: valuecodes/automation/.github/workflows/maintenance-dashboard.yml@<sha>`.
 
 on:
@@ -52,6 +53,30 @@ jobs:
           else
             echo "pnpm=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # Every registry package in the lockfile, for the osv.dev check in the
+      # other job. Git and tarball entries have no registry version and are only
+      # counted, so the section can say how many were not checked.
+      - name: List the locked packages
+        if: steps.detect.outputs.pnpm == 'true'
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/audit"
+          yq -o=json '{"version": .lockfileVersion, "keys": (.packages // {} | keys)}' pnpm-lock.yaml > "$out/lockfile.json"
+          version=$(jq -r '.version | tostring' "$out/lockfile.json")
+          if [[ ! $version =~ ^[69]\.[0-9]+$ ]]; then
+            echo "lockfileVersion $version is not supported" > "$out/packages.status"
+            exit 0
+          fi
+          # v6 keys are `/name@1.2.3`, v9 keys `name@1.2.3(peer@x)`.
+          jq '
+            [ .keys[]
+              | ltrimstr("/") | sub("\\(.*$"; "") | . as $key
+              | ([capture("^(?<name>.+)@(?<version>[^@]+)$")][0] // {name: "", version: ""})
+              | if (.name | test("^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$"))
+                   and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$"))
+                then {name, version} else {skipped: $key} end
+            ] | unique' "$out/lockfile.json" > "$out/packages.json"
 
       - name: Set up pnpm
         if: steps.detect.outputs.pnpm == 'true'
@@ -360,6 +385,206 @@ jobs:
             printf 'warn\t%s not an exact version\t\n' "$unparsed" > "$status_file"
           fi
 
+      # Two checks against public APIs that need no token. Malicious packages:
+      # every locked version plus the catalog's update candidates against the
+      # OpenSSF malicious-packages feed on osv.dev (`MAL-*` ids; GHSA ids are
+      # `pnpm audit`'s job). Update signals: what the packument says about each
+      # candidate that hints at a hijacked account. Runs after the catalog step
+      # because it reuses its rows and downloaded packuments.
+      - name: "Section: supply chain"
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          test -f "$SRC/.ok"
+          out="$SECTIONS/15-supply-chain.md"
+          status_file="$SECTIONS/15-supply-chain.status"
+          work="$RUNNER_TEMP/osv"
+          npm="$RUNNER_TEMP/npm"
+          mkdir -p "$work"
+
+          # The catalog step's status says whether update candidates exist; a
+          # failed catalog check leaves them unknown, so this check fails too
+          # instead of reporting a clean result it could not verify.
+          catalog_state=""
+          catalog_details=""
+          if [[ -f $SECTIONS/20-catalog.status ]]; then
+            IFS=$'\t' read -r catalog_state _ catalog_details < "$SECTIONS/20-catalog.status"
+          fi
+          : > "$work/candidates.jsonl"
+          case $catalog_state in
+            na) ;;
+            ok|update|warn)
+              jq -c 'select(.unparsed | not) | {name, current} + ((.inMajor, .major) | select(. != null) | {version: .})' \
+                "$npm/rows.jsonl" > "$work/candidates.jsonl"
+              ;;
+            *)
+              echo "::error::The dependencies check failed, so the update candidates are unknown."
+              exit 1
+              ;;
+          esac
+          candidates=$(wc -l < "$work/candidates.jsonl")
+
+          # Locked packages come from the audit job; "skipped" entries are git
+          # and tarball dependencies, which have no registry version to look up.
+          if [[ ! -f $AUDIT/status ]]; then
+            echo "::error::The audit job produced no result."
+            exit 1
+          fi
+          audit_status=$(< "$AUDIT/status")
+          lock_note=""
+          locked=0
+          skipped=0
+          : > "$work/queries.jsonl"
+          if [[ $audit_status == skipped:* ]]; then
+            lock_note=${audit_status#skipped: }
+          elif [[ -f $AUDIT/packages.status ]]; then
+            lock_note=$(< "$AUDIT/packages.status")
+          elif [[ ! -f $AUDIT/packages.json ]]; then
+            echo "::error::The audit job produced no package list."
+            exit 1
+          else
+            jq -c '.[] | select(.skipped == null) | {name, version, where: "`pnpm-lock.yaml`"}' "$AUDIT/packages.json" > "$work/queries.jsonl"
+            locked=$(wc -l < "$work/queries.jsonl")
+            skipped=$(jq '[.[] | select(.skipped != null)] | length' "$AUDIT/packages.json")
+          fi
+          jq -c '{name, version, where: "update candidate"}' "$work/candidates.jsonl" >> "$work/queries.jsonl"
+          sort -u "$work/queries.jsonl" -o "$work/queries.jsonl"
+
+          # Batches of 1000 queries, the API's limit. A result that carries
+          # `next_page_token` is incomplete (also after a 20 s server timeout),
+          # so those queries are re-sent with the token until every result is
+          # final. Every batch must answer one result per query, in order.
+          : > "$work/hits.jsonl"
+          cp "$work/queries.jsonl" "$work/pending.jsonl"
+          rounds=0
+          while [[ -s $work/pending.jsonl ]]; do
+            if (( rounds == 10 )); then
+              echo "::error::osv.dev kept paginating after 10 rounds; giving up."
+              exit 1
+            fi
+            rounds=$(( rounds + 1 ))
+            : > "$work/next.jsonl"
+            jq -sc '_nwise(1000)' "$work/pending.jsonl" > "$work/chunks.jsonl"
+            while IFS= read -r chunk; do
+              jq '{queries: map({package: {name: .name, ecosystem: "npm"}, version: .version, page_token: .page_token} | with_entries(select(.value != null)))}' \
+                <<<"$chunk" > "$work/request.json"
+              curl -fsSL --retry 3 -X POST -H 'Content-Type: application/json' --data-binary "@$work/request.json" \
+                https://api.osv.dev/v1/querybatch > "$work/response.json"
+              if ! jq -e --slurpfile res "$work/response.json" 'length == ($res[0].results | length)' <<<"$chunk" > /dev/null; then
+                echo "::error::osv.dev answered a batch with the wrong number of results."
+                exit 1
+              fi
+              jq -c --slurpfile res "$work/response.json" '
+                [., $res[0].results] | transpose[] | .[0] + {vulns: (.[1].vulns // []), next: .[1].next_page_token}' \
+                <<<"$chunk" > "$work/merged.jsonl"
+              jq -c 'select(.next != null) | {name, version, where, page_token: .next}' "$work/merged.jsonl" >> "$work/next.jsonl"
+              jq -c '{name, version, where} + (.vulns[] | select(.id | test("^MAL-[0-9]+-[0-9]+$")) | {id})' "$work/merged.jsonl" >> "$work/hits.jsonl"
+            done < "$work/chunks.jsonl"
+            mv "$work/next.jsonl" "$work/pending.jsonl"
+          done
+          sort -u "$work/hits.jsonl" -o "$work/hits.jsonl"
+          hits=$(wc -l < "$work/hits.jsonl")
+
+          plural() {
+            if (( $1 == 1 )); then echo "$1 $2"; else echo "$1 ${2}s"; fi
+          }
+          coverage=""
+          if [[ -z $lock_note ]]; then
+            coverage="$(plural "$locked" "locked package")"
+            if (( skipped == 1 )); then
+              coverage="$coverage (1 git or tarball entry not checked)"
+            elif (( skipped > 1 )); then
+              coverage="$coverage ($skipped git or tarball entries not checked)"
+            fi
+          fi
+          if (( candidates > 0 )); then
+            coverage="${coverage:+$coverage and }$(plural "$candidates" "update candidate")"
+          fi
+          if [[ -z $coverage ]]; then
+            echo "**Malicious packages (osv.dev):** not applicable, $lock_note." > "$out.tmp"
+          elif (( hits == 0 )); then
+            echo "**Malicious packages (osv.dev):** none of the $coverage is in the OpenSSF malicious-packages database${lock_note:+ (lockfile not checked: $lock_note)}." > "$out.tmp"
+          else
+            {
+              echo "### Malicious packages (osv.dev)"
+              echo
+              echo "$hits of the $coverage are in the OpenSSF malicious-packages database${lock_note:+ (lockfile not checked: $lock_note)}. Remove them before anything else."
+              echo
+              echo "| Package | Version | Where | Advisory |"
+              echo "| --- | --- | --- | --- |"
+              jq -r '
+                def esc: tostring | gsub("\\|"; "\\|");
+                "| 🟥 `\(.name | esc)` | \(.version | esc) | \(.where) | [\(.id)](https://osv.dev/vulnerability/\(.id)) |"' "$work/hits.jsonl"
+            } > "$out.tmp"
+          fi
+
+          # Signals from the packument of each candidate, compared with the
+          # version in use. Missing provenance alone is not a signal: most of
+          # npm has none. Losing it, a different publisher, a publisher who is
+          # not a maintainer, or a release after a long silence is.
+          cat > "$SRC/signals.jq" <<'EOF'
+          def esc: tostring | gsub("\\|"; "\\|");
+          def stamp: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+          def who(v): .versions[v]._npmUser as $u
+            | if $u == null then null
+              elif $u.trustedPublisher then "trusted publishing (\($u.trustedPublisher.id // "?"))"
+              else $u.name end;
+          .time as $time
+          | .versions[$target] as $t
+          | .versions[$cur] as $c
+          | ($time[$target] | stamp) as $tt
+          | ([$time | to_entries[] | select(.key != "created" and .key != "modified") | .value | stamp | select(. < $tt)] | max) as $prev
+          | who($target) as $pub
+          | who($cur) as $curpub
+          | [ (if $c.dist.attestations != null and $t.dist.attestations == null then "provenance dropped" else empty end),
+              (if $pub != null and $curpub != null and $pub != $curpub then "new publisher \($pub | esc)" else empty end),
+              (if $pub != null and $t._npmUser.trustedPublisher == null and ([.maintainers[]?.name] | index($pub)) == null
+               then "publisher \($pub | esc) is not a maintainer" else empty end),
+              (if $prev != null and ($tt - $prev) > 365 * 86400
+               then "first release in \((($tt - $prev) / 2629800) | floor) months" else empty end)
+            ] as $signals
+          | select($signals | length > 0)
+          | "| `\($name | esc)` | \($cur) → \($target) | \($signals | join(", ")) |"
+          EOF
+          : > "$work/signals.md"
+          while IFS= read -r candidate; do
+            name=$(jq -r .name <<<"$candidate")
+            jq -r --arg name "$name" --arg cur "$(jq -r .current <<<"$candidate")" --arg target "$(jq -r .version <<<"$candidate")" \
+              -f "$SRC/signals.jq" "$npm/${name//\//%2F}.json" >> "$work/signals.md"
+          done < "$work/candidates.jsonl"
+          flagged=$(wc -l < "$work/signals.md")
+          echo >> "$out.tmp"
+          if [[ $catalog_state == na ]]; then
+            echo "**Update signals:** not applicable, $catalog_details." >> "$out.tmp"
+          elif (( candidates == 0 )); then
+            echo "**Update signals:** none, no pending catalog updates." >> "$out.tmp"
+          elif (( flagged == 0 )); then
+            echo "**Update signals:** none for the $(plural "$candidates" "update candidate")." >> "$out.tmp"
+          else
+            {
+              echo "### Update signals (npm registry)"
+              echo
+              echo "$flagged of the $(plural "$candidates" "update candidate") carry a signal worth a look before updating."
+              echo
+              echo "| Package | Update | Signals |"
+              echo "| --- | --- | --- |"
+              cat "$work/signals.md"
+            } >> "$out.tmp"
+          fi
+
+          if (( hits > 0 )); then
+            names=$(jq -r '.name' "$work/hits.jsonl" | sort -u | head -n 3 | paste -sd ',' | sed 's/,/, /g')
+            printf 'alert\t%s malicious\t%s\n' "$hits" "${names//|/\\|}" > "$status_file.tmp"
+          elif (( flagged > 0 )); then
+            printf 'warn\t%s of %s updates have signals\tsee Supply chain\n' "$flagged" "$candidates" > "$status_file.tmp"
+          elif [[ -z $coverage ]]; then
+            printf 'na\tnot applicable\t%s\n' "$lock_note" > "$status_file.tmp"
+          else
+            printf 'ok\tno findings\t%s checked\n' "${coverage:-0 packages}" > "$status_file.tmp"
+          fi
+          mv "$out.tmp" "$out"
+          mv "$status_file.tmp" "$status_file"
+
       - name: "Section: pnpm"
         continue-on-error: true
         run: |
@@ -532,7 +757,7 @@ jobs:
           # An empty fragment with no status is a disabled check. A fragment
           # without a valid status means its step died halfway, so it counts as
           # failed too.
-          for section in 10-security 20-catalog 30-pnpm 40-gitleaks 50-node; do
+          for section in 10-security 15-supply-chain 20-catalog 30-pnpm 40-gitleaks 50-node; do
             name=${section#*-}
             if [[ -f $section.md && ! -s $section.md && ! -f $section.status ]]; then
               continue
@@ -554,6 +779,7 @@ jobs:
           check_name() {
             case $1 in
               security) echo Security ;;
+              supply-chain) echo "Supply chain" ;;
               catalog) echo Dependencies ;;
               node) echo Node.js ;;
               *) echo "$1" ;;
@@ -574,6 +800,14 @@ jobs:
           # Alert blocks for what needs action; nothing when there is nothing to say.
           alerts() {
             local state text details file failed=() node_warning=""
+            if [[ -f 15-supply-chain.status ]]; then
+              IFS=$'\t' read -r state text details < 15-supply-chain.status
+              if [[ $state == alert ]]; then
+                echo "> [!CAUTION]"
+                echo "> $text package(s) ($details) in \`pnpm-lock.yaml\` or among the update candidates, see Supply chain below."
+                echo
+              fi
+            fi
             if [[ -f 10-security.status ]]; then
               IFS=$'\t' read -r state text details < 10-security.status
               if [[ $state == alert ]]; then
@@ -711,5 +945,12 @@ jobs:
           failed=(*.failed)
           if (( ${#failed[@]} > 0 )); then
             echo "::error::Checks failed: ${failed[*]%.failed}."
+            exit 1
+          fi
+          # Unlike `pnpm audit` findings, a known-malicious package is an
+          # incident, and a red scheduled run is the only notification
+          # `GITHUB_TOKEN` can send.
+          if [[ -f 15-supply-chain.status && $(cut -f 1 15-supply-chain.status) == alert ]]; then
+            echo "::error::Known-malicious package(s) found: $(cut -f 3 15-supply-chain.status). See the Supply chain section of the dashboard."
             exit 1
           fi
