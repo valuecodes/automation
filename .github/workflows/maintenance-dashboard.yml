@@ -472,7 +472,8 @@ jobs:
             fi
             rounds=$(( rounds + 1 ))
             : > "$work/next.jsonl"
-            jq -sc '_nwise(1000)' "$work/pending.jsonl" > "$work/chunks.jsonl"
+            # Spelled out because `_nwise` is gone from jq 1.8 on the runner.
+            jq -sc '. as $all | range(0; length; 1000) | $all[.:. + 1000]' "$work/pending.jsonl" > "$work/chunks.jsonl"
             while IFS= read -r chunk; do
               jq '{queries: map({package: {name: .name, ecosystem: "npm"}, version: .version, page_token: .page_token} | with_entries(select(.value != null)))}' \
                 <<<"$chunk" > "$work/request.json"
