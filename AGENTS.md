@@ -15,7 +15,7 @@ Reusable GitHub Actions workflows that other repos call with
 | --------------------------------------------- | ----------------------------------------------------- |
 | `.github/workflows/maintenance-dashboard.yml` | Reusable: keeps the **Maintenance dashboard** issue   |
 | `.github/workflows/workflow-lint.yml`         | Reusable: actionlint and zizmor over workflow files   |
-| `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, then `workflow-lint.yml`       |
+| `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, shellcheck, both reusables     |
 | `.github/actions/setup/`                      | Composite setup action: pnpm, Node.js, frozen install |
 | `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions       |
 | `scripts/dashboard-dry-run.sh`                | Runs the dashboard's steps locally, prints the body   |
@@ -37,17 +37,21 @@ pnpm format:check                # oxfmt --check (no writes)
 scripts/dashboard-dry-run.sh     # The dashboard body for this repo, or `owner/repo sha dir`
 ```
 
-The dashboard workflow only ever runs inside caller repos and CI only lints it, so run
-`scripts/dashboard-dry-run.sh` after changing it: it executes every `run:` step in order
-with dry-run on (real registries and osv.dev, no issue touched) and prints the body, also
-saved under `tmp/dashboard/` (ignored). It needs gh, jq, yq, pnpm and curl, and the commit
-must exist on GitHub.
+The dashboard workflow only writes issues inside caller repos; CI runs it against this repo
+in dry-run mode. Run `scripts/dashboard-dry-run.sh` after changing it to see the result
+before pushing, or to see it for another repo: it executes every `run:` step in order with
+dry-run on (real registries and osv.dev, no issue touched) and prints the title and body,
+also saved under `tmp/dashboard/` (ignored). The inputs are fixed to their defaults, and the
+script exits 1 when a step failed. It needs gh, jq, yq, pnpm and curl, and the commit must
+exist on GitHub.
 
 There is no post-edit formatting hook: run `pnpm format` yourself before committing.
 
-actionlint (with shellcheck over the `run:` scripts) and zizmor run in CI only; they are not
-npm packages. CI (`.github/workflows/ci.yml`) runs all three on PRs and on push to `main`,
-the two linters through `workflow-lint.yml`; its `ci` job is the check to require on `main`.
+actionlint (with shellcheck over the `run:` scripts), shellcheck over `scripts/` and zizmor
+run in CI only; they are not npm packages. CI (`.github/workflows/ci.yml`) runs them all on
+PRs and on push to `main`, the two linters through `workflow-lint.yml`, and calls
+`maintenance-dashboard.yml` with `dry-run: true`; its `ci` job is the check to require on
+`main`.
 
 ---
 
