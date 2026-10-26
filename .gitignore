@@ -1,2 +1,4 @@
 node_modules
 .worktrees/
+# Output of scripts/dashboard-dry-run.sh.
+tmp/

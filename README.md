@@ -46,7 +46,8 @@ the issue, the next run creates a new one.
 The `audit` job checks out the repo to run `pnpm audit` from the lockfile alone (no install, and
 `--ignore-pnpmfile` so no repo code runs) and to list the locked packages for the osv.dev check.
 Everything else is read through the REST API with `GITHUB_TOKEN`. A broken check makes the run red and shows "check failed" in its section; the
-other sections still render.
+other sections still render. To see the body for a repo without touching its issue, run
+`scripts/dashboard-dry-run.sh owner/repo <commit> <checkout>` from a clone of this repo.
 
 ### How a run decides
 

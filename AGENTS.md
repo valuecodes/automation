@@ -18,6 +18,7 @@ Reusable GitHub Actions workflows that other repos call with
 | `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, then `workflow-lint.yml`       |
 | `.github/actions/setup/`                      | Composite setup action: pnpm, Node.js, frozen install |
 | `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions       |
+| `scripts/dashboard-dry-run.sh`                | Runs the dashboard's steps locally, prints the body   |
 
 `README.md` is the user-facing doc for each reusable workflow: what it does, a flowchart of
 how a run decides, and the caller snippet. Keep it in step with the workflow.
@@ -33,7 +34,14 @@ how a run decides, and the caller snippet. Keep it in step with the workflow.
 pnpm install                     # Install oxfmt
 pnpm format                      # oxfmt, writes in place
 pnpm format:check                # oxfmt --check (no writes)
+scripts/dashboard-dry-run.sh     # The dashboard body for this repo, or `owner/repo sha dir`
 ```
+
+The dashboard workflow only ever runs inside caller repos and CI only lints it, so run
+`scripts/dashboard-dry-run.sh` after changing it: it executes every `run:` step in order
+with dry-run on (real registries and osv.dev, no issue touched) and prints the body, also
+saved under `tmp/dashboard/` (ignored). It needs gh, jq, yq, pnpm and curl, and the commit
+must exist on GitHub.
 
 There is no post-edit formatting hook: run `pnpm format` yourself before committing.
 
