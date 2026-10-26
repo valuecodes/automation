@@ -34,7 +34,8 @@ export GH_TOKEN
 GH_TOKEN=$(gh auth token)
 export REPO=${1:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
 export SHA=${2:-$(git -C "$checkout" rev-parse HEAD)}
-if [[ $(git -C "$checkout" rev-parse HEAD) != "$SHA" ]]; then
+# A prefix match, so a short commit argument does not warn.
+if [[ $(git -C "$checkout" rev-parse HEAD) != "$SHA"* ]]; then
   echo "::warning::The checkout is not at $SHA; the audit job runs on the checkout, the other steps read $SHA through the API." >&2
 fi
 export SERVER_URL=https://github.com
