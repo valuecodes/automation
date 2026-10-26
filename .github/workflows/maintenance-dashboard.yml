@@ -1,9 +1,10 @@
 name: Maintenance dashboard
 
-# Keeps one issue per repo (label `maintenance-dashboard`) listing pending
-# updates: the `catalog:` in `pnpm-workspace.yaml`, pnpm, gitleaks, Node.js,
-# `pnpm audit` findings, osv.dev malicious-package hits and update signals. The
-# body is recomputed every run and edited only when it changed. No PRs, no
+# Keeps one issue per repo (label `maintenance-dashboard`, title
+# `Maintenance dashboard: <worst state>`) listing pending updates: the
+# `catalog:` in `pnpm-workspace.yaml`, pnpm, gitleaks, Node.js, `pnpm audit`
+# findings, osv.dev malicious-package hits and update signals. The title and
+# body are recomputed every run and edited only when they changed. No PRs, no
 # commits; updates stay manual. Uses only `GITHUB_TOKEN`: files are read
 # through the REST API, and `pnpm audit` runs from the lockfile without
 # installing. Other repos call it with
@@ -118,8 +119,11 @@ jobs:
     permissions:
       contents: read
       issues: write
+    # Runs that edit the issue go one at a time per repo. A dry run writes
+    # nothing shared, and GitHub cancels a pending job when a newer one joins
+    # its group, so dry runs (one per CI run here) each get their own group.
     concurrency:
-      group: maintenance-dashboard-${{ github.repository }}
+      group: ${{ inputs.dry-run && format('maintenance-dashboard-dry-run-{0}', github.run_id) || format('maintenance-dashboard-{0}', github.repository) }}
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
@@ -794,6 +798,34 @@ jobs:
             touch "$section.failed"
           done
 
+          # The title carries the worst state, so the pinned issue tells from
+          # the issue list whether anything needs attention. The label, not the
+          # title, is how the issue is found again, so the title is free to change.
+          headline() {
+            local file state states="" updates=0
+            for file in [0-9][0-9]-*.status; do
+              state=$(cut -f 1 "$file")
+              states="$states $state"
+              if [[ $state == update ]]; then
+                updates=$(( updates + 1 ))
+              fi
+            done
+            if [[ $states == *" alert"* ]]; then
+              echo "🔴 alert"
+            elif [[ $states == *" failed"* ]]; then
+              echo "❌ check failed"
+            elif [[ $states == *" warn"* ]]; then
+              echo "⚠️ attention"
+            elif (( updates == 1 )); then
+              echo "⬆️ 1 update"
+            elif (( updates > 1 )); then
+              echo "⬆️ $updates updates"
+            else
+              echo "✅ all current"
+            fi
+          }
+          title="Maintenance dashboard: $(headline)"
+
           check_name() {
             case $1 in
               security) echo Security ;;
@@ -900,6 +932,8 @@ jobs:
           fi
           content=$(build "$keep")
           {
+            echo "## $title"
+            echo
             echo "$content"
             echo
             echo "---"
@@ -930,13 +964,13 @@ jobs:
           } > "$RUNNER_TEMP/body.md"
 
           publish() {
-            local numbers number url existing
+            local numbers number url existing existing_title
             gh label create maintenance-dashboard --repo "$REPO" --force \
               --color 1d76db --description "Kept up to date by the maintenance-dashboard workflow (valuecodes/automation)"
             numbers=$(gh issue list --repo "$REPO" --label maintenance-dashboard --state open \
               --json number --jq 'sort_by(.number) | .[].number')
             if [[ -z $numbers ]]; then
-              url=$(gh issue create --repo "$REPO" --title "Maintenance dashboard" \
+              url=$(gh issue create --repo "$REPO" --title "$title" \
                 --label maintenance-dashboard --body-file "$RUNNER_TEMP/body.md")
               echo "Created $url. Pin it in the repo's issue list."
               return
@@ -945,19 +979,22 @@ jobs:
             if [[ $numbers == *$'\n'* ]]; then
               echo "::warning::Several open issues carry the maintenance-dashboard label; editing #$number and leaving the rest."
             fi
-            # Unchanged means the same content, source link and marker, so a hand
-            # edit is overwritten and an issue from before the link gains it once.
-            existing=$(gh issue view "$number" --repo "$REPO" --json body --jq .body | tr -d '\r')
-            if [[ $existing == "$content"$'\n\n---\nLast changed: '*"$source_link"$'\n'"$marker" ]]; then
+            # Unchanged means the same title, content, source link and marker, so
+            # a hand edit is overwritten and an issue from before the link gains
+            # it once. Editing the title does not notify anyone either.
+            gh issue view "$number" --repo "$REPO" --json title,body > "$RUNNER_TEMP/issue.json"
+            existing_title=$(jq -r .title "$RUNNER_TEMP/issue.json")
+            existing=$(jq -r .body "$RUNNER_TEMP/issue.json" | tr -d '\r')
+            if [[ $existing_title == "$title" && $existing == "$content"$'\n\n---\nLast changed: '*"$source_link"$'\n'"$marker" ]]; then
               echo "Issue #$number is unchanged."
             else
-              gh issue edit "$number" --repo "$REPO" --body-file "$RUNNER_TEMP/body.md" > /dev/null
+              gh issue edit "$number" --repo "$REPO" --title "$title" --body-file "$RUNNER_TEMP/body.md" > /dev/null
               echo "Updated issue #$number."
             fi
           }
 
           if [[ $DRY_RUN == true ]]; then
-            echo "Dry run: the body is in the run summary; the issue was not touched."
+            echo "Dry run: the title and body are in the run summary; the issue was not touched."
           else
             publish
           fi

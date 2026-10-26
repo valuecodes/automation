@@ -1,7 +1,9 @@
 name: CI
 
-# Checks formatting with oxfmt and lints the workflow files through this repo's
-# own `workflow-lint.yml`. The `ci` job is the check to require on `main`.
+# Checks formatting with oxfmt, shellchecks `scripts/`, lints the workflow
+# files through this repo's own `workflow-lint.yml` and runs the dashboard
+# against this repo in dry-run mode. The `ci` job is the check to require on
+# `main`.
 
 on:
   pull_request:
@@ -32,14 +34,36 @@ jobs:
         uses: ./.github/actions/setup # zizmor: ignore[self-repository]
 
       - name: oxfmt
-        run: pnpm format:check
+        run: |
+          set -euo pipefail
+          pnpm format:check
 
-  # Runs the reusable workflow at this commit, so a change to it is checked on
-  # its own PR. Same `$/` caveat as the setup action above.
+      # actionlint only covers the `run:` scripts inside workflows; the runner
+      # ships shellcheck for the standalone scripts.
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          shellcheck scripts/*.sh
+
+  # Runs the reusable workflows at this commit, so a change to one is checked
+  # on its own PR. Same `$/` caveat as the setup action above.
   workflow-lint:
     permissions:
       contents: read
     uses: ./.github/workflows/workflow-lint.yml # zizmor: ignore[self-repository]
+
+  # The dashboard only ever writes issues in caller repos, so this is the one
+  # place its steps run before a caller re-pins. Dry run builds the body into
+  # the run summary and touches no issue; `issues: write` is still needed
+  # because a called job's permissions are checked against the caller's. A
+  # failed check (including an npm or osv.dev outage) makes this red on purpose.
+  maintenance-dashboard:
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/maintenance-dashboard.yml # zizmor: ignore[self-repository]
+    with:
+      dry-run: true
 
   # The one check to require on `main`. `if: always()` makes it run even when a
   # needed job failed, so it reports a failure instead of skipping.
@@ -48,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 1
     if: always()
-    needs: [format, workflow-lint]
+    needs: [format, workflow-lint, maintenance-dashboard]
     permissions: {}
     steps:
       - name: Check results
