@@ -62,7 +62,9 @@ jobs:
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/audit"
-          yq -o=json '{"version": .lockfileVersion, "keys": (.packages // {} | keys)}' pnpm-lock.yaml > "$out/lockfile.json"
+          # pnpm 12 writes several YAML documents (the package manager's own
+          # dependencies, then the project), so `ea` reads them all.
+          yq ea -o=json '[.] | {"version": .[0].lockfileVersion, "keys": [.[] | (.packages // {}) | keys | .[]]}' pnpm-lock.yaml > "$out/lockfile.json"
           version=$(jq -r '.version | tostring' "$out/lockfile.json")
           if [[ ! $version =~ ^[69]\.[0-9]+$ ]]; then
             echo "lockfileVersion $version is not supported" > "$out/packages.status"
