@@ -141,9 +141,11 @@ jobs:
 
       # Each section step writes `$SECTIONS/NN-name.md` and, last, a one-line
       # `NN-name.status` (`state<TAB>status<TAB>details`, state one of ok, na,
-      # update, warn, alert, failed) for the summary table. A step never stops
-      # the others; the last step treats a missing fragment or status as a
-      # failed check.
+      # update, warn, alert, failed) for the summary table. The table shows a
+      # fixed word per state next to the details, so the details carry the one
+      # fact worth reading (a count, a version, a reason) and the status text
+      # is a short phrase for logs. A step never stops the others; the last
+      # step treats a missing fragment or status as a failed check.
       - name: Read the repo files at this commit
         continue-on-error: true
         run: |
@@ -267,7 +269,7 @@ jobs:
                     | "| \(.severity | mark) \(.severity | esc) | `\(.module_name | esc)` \($found | esc) | \(.vulnerable_versions // "?" | esc) | \(.patched_versions // "none" | esc) | \($paths[0] // "?" | path | esc)\(if ($paths | length) > 1 then " (+\($paths | length - 1) more)" else "" end) | [\(.github_advisory_id // .id)](\(.url)) |"
                   ' "$AUDIT/audit.json"
                 } > "$out.tmp"
-                printf 'alert\t%s\t%s\n' "$count $noun" "$breakdown" > "$status_file.tmp"
+                printf 'alert\t%s\t%s (%s)\n' "$count $noun" "$count $noun" "$breakdown" > "$status_file.tmp"
               fi
               ;;
             *)
@@ -349,7 +351,7 @@ jobs:
             if (( total == 1 )); then
               noun=package
             fi
-            printf 'ok\tup to date\t%s catalog %s\n' "$total" "$noun" > "$status_file"
+            printf 'ok\tup to date\t%s %s\n' "$total" "$noun" > "$status_file"
             exit 0
           fi
           plural() {
@@ -382,9 +384,9 @@ jobs:
             echo "| --- | --- | --- | --- | --- |"
           } > "$out"
           if (( outdated > 0 )); then
-            printf 'update\t%s of %s outdated\t%s\n' "$outdated" "$total" "$details" > "$status_file"
+            printf 'update\t%s of %s outdated\t%s of %s outdated%s\n' "$outdated" "$total" "$outdated" "$total" "${details:+, $details}" > "$status_file"
           else
-            printf 'warn\t%s not an exact version\t\n' "$unparsed" > "$status_file"
+            printf 'warn\t%s not an exact version\t%s\n' "$unparsed" "$details" > "$status_file"
           fi
 
       # Two checks against public APIs that need no token. Malicious packages:
@@ -490,15 +492,16 @@ jobs:
           plural() {
             if (( $1 == 1 )); then echo "$1 $2"; else echo "$1 ${2}s"; fi
           }
-          coverage=""
+          lock_coverage=""
           if [[ -z $lock_note ]]; then
-            coverage="$(plural "$locked" "locked package")"
+            lock_coverage="$(plural "$locked" "locked package")"
             if (( skipped == 1 )); then
-              coverage="$coverage (1 git or tarball entry not checked)"
+              lock_coverage="$lock_coverage (1 git or tarball entry not checked)"
             elif (( skipped > 1 )); then
-              coverage="$coverage ($skipped git or tarball entries not checked)"
+              lock_coverage="$lock_coverage ($skipped git or tarball entries not checked)"
             fi
           fi
+          coverage=$lock_coverage
           if (( candidates > 0 )); then
             coverage="${coverage:+$coverage and }$(plural "$candidates" "update candidate")"
           fi
@@ -555,14 +558,26 @@ jobs:
               -f "$SRC/signals.jq" "$npm/${name//\//%2F}.json" >> "$work/signals.md"
           done < "$work/candidates.jsonl"
           flagged=$(wc -l < "$work/signals.md")
-          echo >> "$out.tmp"
           if [[ $catalog_state == na ]]; then
-            echo "**Update signals:** not applicable, $catalog_details." >> "$out.tmp"
+            signals="update signals not applicable, $catalog_details"
           elif (( candidates == 0 )); then
-            echo "**Update signals:** none, no pending catalog updates." >> "$out.tmp"
-          elif (( flagged == 0 )); then
-            echo "**Update signals:** none for the $(plural "$candidates" "update candidate")." >> "$out.tmp"
+            signals="no pending catalog updates to check for signals"
           else
+            signals="no signals on the $(plural "$candidates" "update candidate")"
+          fi
+          # With nothing found, one line says it all; a table only when there is
+          # something to show.
+          if (( hits == 0 && flagged == 0 )); then
+            if [[ -z $coverage ]]; then
+              echo "**Supply chain:** not applicable, $lock_note; $signals." > "$out.tmp"
+            else
+              echo "**Supply chain:** none of the $coverage is in the OpenSSF malicious-packages database (osv.dev)${lock_note:+; lockfile not checked: $lock_note}; $signals." > "$out.tmp"
+            fi
+          elif (( flagged == 0 )); then
+            echo >> "$out.tmp"
+            echo "**Update signals:** $signals." >> "$out.tmp"
+          else
+            echo >> "$out.tmp"
             {
               echo "### Update signals (npm registry)"
               echo
@@ -576,13 +591,13 @@ jobs:
 
           if (( hits > 0 )); then
             names=$(jq -r '.name' "$work/hits.jsonl" | sort -u | head -n 3 | paste -sd ',' | sed 's/,/, /g')
-            printf 'alert\t%s\t%s\n' "$(plural "$hits" "malicious package")" "${names//|/\\|}" > "$status_file.tmp"
+            printf 'alert\t%s\t%s: %s\n' "$(plural "$hits" "malicious package")" "$(plural "$hits" "malicious package")" "${names//|/\\|}" > "$status_file.tmp"
           elif (( flagged > 0 )); then
-            printf 'warn\t%s of %s with signals\tsee Supply chain\n' "$flagged" "$(plural "$candidates" "update")" > "$status_file.tmp"
+            printf 'warn\tupdate signals\t%s of %s with signals\n' "$flagged" "$(plural "$candidates" "update")" > "$status_file.tmp"
           elif [[ -z $coverage ]]; then
             printf 'na\tnot applicable\t%s\n' "$lock_note" > "$status_file.tmp"
           else
-            printf 'ok\tno findings\t%s checked\n' "$coverage" > "$status_file.tmp"
+            printf 'ok\tno findings\t%s checked\n' "${lock_coverage:-$coverage}" > "$status_file.tmp"
           fi
           mv "$out.tmp" "$out"
           mv "$status_file.tmp" "$status_file"
@@ -705,6 +720,7 @@ jobs:
               note="$date, includes a security release"
               state=warn
               summary="$version available, includes a security release"
+              details="$details, security release"
             fi
             status="$version ($note) available."
           fi
@@ -787,15 +803,17 @@ jobs:
               *) echo "$1" ;;
             esac
           }
-          # The one place that pairs a state with its emoji; each sits next to a word.
+          # The one place that pairs a state with its emoji and word. The word is
+          # fixed per state, so the Status column reads the same in every row and
+          # still makes sense where emoji do not render.
           icon() {
             case $1 in
-              ok) echo "✅" ;;
-              na) echo "⚪" ;;
-              update) echo "⬆️" ;;
-              warn) echo "⚠️" ;;
-              alert) echo "🔴" ;;
-              *) echo "❌" ;;
+              ok) echo "✅ ok" ;;
+              na) echo "⚪ n/a" ;;
+              update) echo "⬆️ update" ;;
+              warn) echo "⚠️ attention" ;;
+              alert) echo "🔴 alert" ;;
+              *) echo "❌ failed" ;;
             esac
           }
 
@@ -806,7 +824,7 @@ jobs:
               IFS=$'\t' read -r state text details < 15-supply-chain.status
               if [[ $state == alert ]]; then
                 echo "> [!CAUTION]"
-                echo "> $text ($details) in \`pnpm-lock.yaml\` or among the update candidates, see Supply chain below."
+                echo "> $details in \`pnpm-lock.yaml\` or among the update candidates, see Supply chain below."
                 echo
               fi
             fi
@@ -814,7 +832,7 @@ jobs:
               IFS=$'\t' read -r state text details < 10-security.status
               if [[ $state == alert ]]; then
                 echo "> [!CAUTION]"
-                echo "> $text ($details) in \`pnpm-lock.yaml\`, see Security below."
+                echo "> $details in \`pnpm-lock.yaml\`, see Security below."
                 echo
               fi
             fi
@@ -825,7 +843,7 @@ jobs:
             if [[ -f 50-node.status ]]; then
               IFS=$'\t' read -r state text details < 50-node.status
               if [[ $state == warn ]]; then
-                node_warning="Node.js: $text ($details), see Node.js below."
+                node_warning="Node.js: $details, see Node.js below."
               fi
             fi
             if (( ${#failed[@]} > 0 )) || [[ -n $node_warning ]]; then
@@ -856,7 +874,7 @@ jobs:
             for file in [0-9][0-9]-*.status; do
               IFS=$'\t' read -r state text details < "$file"
               file=${file%.status}
-              echo "| $(check_name "${file#*-}") | $(icon "$state") ${text//|/\\|} | ${details//|/\\|} |"
+              echo "| $(check_name "${file#*-}") | $(icon "$state") | ${details//|/\\|} |"
             done
             for file in [0-9][0-9]-*.md; do
               [[ -s $file ]] || continue
@@ -953,6 +971,6 @@ jobs:
           # incident, and a red scheduled run is the only notification
           # `GITHUB_TOKEN` can send.
           if [[ -f 15-supply-chain.status && $(cut -f 1 15-supply-chain.status) == alert ]]; then
-            echo "::error::Known-malicious package(s) found: $(cut -f 3 15-supply-chain.status). See the Supply chain section of the dashboard."
+            echo "::error::$(cut -f 3 15-supply-chain.status). See the Supply chain section of the dashboard."
             exit 1
           fi

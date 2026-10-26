@@ -30,10 +30,10 @@ end-of-life date from the [release schedule](https://github.com/nodejs/Release),
 LTS major when there is one: "Node.js 22 is in maintenance, end of life 2027-04-30; Node.js 24 is
 Active LTS."
 
-The body opens with a summary table, one row per check with its state (✅ up to date, ⬆️ update
-available, ⚠️ needs attention, 🔴 vulnerabilities or malicious packages found, ⚪ not applicable,
-❌ check failed). An alert box above it calls out malicious packages, `pnpm audit` findings, failed
-checks, and a Node.js security release or end of life. The sections with the details follow: the security table marks each severity
+The body opens with a summary table, one row per check with a fixed status word (✅ ok,
+⬆️ update, ⚠️ attention, 🔴 alert, ⚪ n/a, ❌ failed) and the one detail that matters: a count,
+a version or a reason. An alert box above it calls out malicious packages, `pnpm audit`
+findings, failed checks, and a Node.js security release or end of life. The sections with the details follow: the security table marks each severity
 (🟥 critical, 🟧 high, 🟨 moderate, ⬜ low) and the dependency table marks a new major with ⚠️.
 
 The workflow never changes code: no PRs, no commits. Doing the updates stays manual. Every run
