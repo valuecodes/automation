@@ -8,10 +8,10 @@ month for releases at least 14 days old; callers get those bumps only when they 
 
 ## `maintenance-dashboard.yml`
 
-Keeps one issue per repo, labelled `maintenance-dashboard` and titled `Maintenance dashboard:
-<state>`, that lists what is due: dependency updates for the `catalog:` in `pnpm-workspace.yaml`, pnpm
-(`packageManager`), gitleaks (`GITLEAKS_VERSION` in the secrets-scan script), Node.js (`.nvmrc`)
-and `pnpm audit` findings. Like pnpm's `minimumReleaseAge`, a release is listed only once it is
+Keeps one issue per repo, labelled `maintenance-dashboard` and titled
+`Maintenance dashboard: <state>`, that lists what is due: dependency updates for the `catalog:`
+in `pnpm-workspace.yaml`, pnpm (`packageManager`), gitleaks (`GITLEAKS_VERSION` in the
+secrets-scan script), Node.js (`.nvmrc`) and `pnpm audit` findings. Like pnpm's `minimumReleaseAge`, a release is listed only once it is
 `min-release-age-days` old (default 14); prereleases never are. A check whose source file is
 missing shows as "not applicable".
 
