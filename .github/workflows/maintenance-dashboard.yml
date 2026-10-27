@@ -252,8 +252,8 @@ jobs:
                 fi
                 # The banner and the summary table already give the count, so the
                 # section is the table alone. Advisories on the same package,
-                # version, path and fix share a row: one update clears them all.
-                # A different fix or path keeps its own row.
+                # version, paths and fix share a row: one update clears them all.
+                # A different fix or path set keeps its own row.
                 {
                   echo "### Security (pnpm audit)"
                   echo
@@ -273,10 +273,10 @@ jobs:
                       | ([.findings[].paths[]] | unique) as $paths
                       | { rank: (.severity | sev), severity: (.severity | tostring), module: .module_name,
                           found: ([.findings[].version] | unique | join(", ")),
-                          patched: (.patched_versions // "none"),
+                          patched: (.patched_versions // "none"), paths: $paths,
                           path: (($paths[0] // "?" | path) + (if ($paths | length) > 1 then " (+\($paths | length - 1) more)" else "" end)),
                           link: "[\(.github_advisory_id // .id)](\(.url))" } ]
-                    | group_by([.module, .found, .patched, .path])
+                    | group_by([.module, .found, .patched, .paths])
                     | map(sort_by(.rank, .link))
                     | sort_by(.[0].rank, .[0].module) | .[]
                     | "| \(.[0].severity | mark) \(.[0].severity | esc) | `\(.[0].module | esc)` \(.[0].found | esc) | \(.[0].patched | esc) | \(.[0].path | esc) | \(map(.link) | join(", ")) |"
@@ -976,7 +976,9 @@ jobs:
                 head -n "$keep" "$rows"
                 total=$(wc -l < "$rows")
                 if (( keep < total )); then
-                  echo "| … $(( total - keep )) more, see [the latest run's summary]($RUNS_URL) | | | | |"
+                  # One cell fits the table with or without the "Latest major"
+                  # column; Markdown fills the missing cells.
+                  echo "| … $(( total - keep )) more, see [the latest run's summary]($RUNS_URL) |"
                 fi
               fi
             done
