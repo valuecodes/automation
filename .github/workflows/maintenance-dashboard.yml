@@ -250,13 +250,15 @@ jobs:
                 if (( count == 1 )); then
                   noun=vulnerability
                 fi
+                # The banner and the summary table already give the count, so the
+                # section is the table alone. Advisories on the same package,
+                # version, path and fix share a row: one update clears them all.
+                # A different fix or path keeps its own row.
                 {
                   echo "### Security (pnpm audit)"
                   echo
-                  echo "$count $noun ($breakdown) in \`pnpm-lock.yaml\`."
-                  echo
-                  echo "| Severity | Package | Vulnerable | Patched | Path | Advisory |"
-                  echo "| --- | --- | --- | --- | --- | --- |"
+                  echo "| Severity | Package | Patched | Path | Advisories |"
+                  echo "| --- | --- | --- | --- | --- |"
                   # Paths look like `.>knip>zod` or `apps__playground>wrangler>sharp`.
                   jq -r '
                     def sev: {critical: 0, high: 1, moderate: 2, low: 3, info: 4}[.] // 5;
@@ -267,10 +269,17 @@ jobs:
                       | (if $p[0] == "." then "" else ($p[0] | gsub("__"; "/")) + ": " end)
                       + ($p[1:] | join(" > "))
                       + (if ($p | length) == 2 then " (direct)" else "" end);
-                    [.advisories[]] | sort_by((.severity | sev), .module_name) | .[]
-                    | ([.findings[].paths[]] | unique) as $paths
-                    | ([.findings[].version] | unique | join(", ")) as $found
-                    | "| \(.severity | mark) \(.severity | esc) | `\(.module_name | esc)` \($found | esc) | \(.vulnerable_versions // "?" | esc) | \(.patched_versions // "none" | esc) | \($paths[0] // "?" | path | esc)\(if ($paths | length) > 1 then " (+\($paths | length - 1) more)" else "" end) | [\(.github_advisory_id // .id)](\(.url)) |"
+                    [ .advisories[]
+                      | ([.findings[].paths[]] | unique) as $paths
+                      | { rank: (.severity | sev), severity: (.severity | tostring), module: .module_name,
+                          found: ([.findings[].version] | unique | join(", ")),
+                          patched: (.patched_versions // "none"),
+                          path: (($paths[0] // "?" | path) + (if ($paths | length) > 1 then " (+\($paths | length - 1) more)" else "" end)),
+                          link: "[\(.github_advisory_id // .id)](\(.url))" } ]
+                    | group_by([.module, .found, .patched, .path])
+                    | map(sort_by(.rank, .link))
+                    | sort_by(.[0].rank, .[0].module) | .[]
+                    | "| \(.[0].severity | mark) \(.[0].severity | esc) | `\(.[0].module | esc)` \(.[0].found | esc) | \(.[0].patched | esc) | \(.[0].path | esc) | \(map(.link) | join(", ")) |"
                   ' "$AUDIT/audit.json"
                 } > "$out.tmp"
                 printf 'alert\t%s\t%s (%s)\n' "$count $noun" "$count $noun" "$breakdown" > "$status_file.tmp"
@@ -338,16 +347,19 @@ jobs:
               -f "$SRC/newer.jq" "$work/${name//\//%2F}.json" >> "$work/rows.jsonl"
           done
 
-          # Rows are kept apart so the last step can truncate them.
-          rows="${out%.md}.rows"
-          jq -r '
-            select(.unparsed or .inMajor != null or .major != null)
-            | if .unparsed then "| `\(.name)` | `\(.current)` | not an exact version | | |"
-              else "| `\(.name)` | \(.current) | \(.inMajor // "") | \(if .major then "⚠️ \(.major)" else "" end) | \(.majorDate // .inMajorDate) |" end
-          ' "$work/rows.jsonl" > "$rows"
           outdated=$(jq -s 'map(select(.inMajor != null or .major != null)) | length' "$work/rows.jsonl")
           majors=$(jq -s 'map(select(.major != null)) | length' "$work/rows.jsonl")
           unparsed=$(jq -s 'map(select(.unparsed)) | length' "$work/rows.jsonl")
+          # Rows are kept apart so the last step can truncate them. The
+          # "Latest major" column is left out when no row would fill it.
+          rows="${out%.md}.rows"
+          jq -r --argjson majors "$majors" '
+            select(.unparsed or .inMajor != null or .major != null)
+            | if .unparsed then ["`\(.name)`", "`\(.current)`", "not an exact version", "", ""]
+              else ["`\(.name)`", .current, (.inMajor // ""), (if .major then "⚠️ \(.major)" else "" end), (.majorDate // .inMajorDate)] end
+            | if $majors == 0 then del(.[3]) else . end
+            | "| \(join(" | ")) |"
+          ' "$work/rows.jsonl" > "$rows"
           if (( outdated + unparsed == 0 )); then
             rm "$rows"
             echo "**Dependencies:** all $total catalog packages are up to date." > "$out"
@@ -384,8 +396,13 @@ jobs:
               echo "\`@types/node\` is capped at the \`.nvmrc\` major ($node_major)."
             fi
             echo
-            echo "| Package | Current | Latest in major | Latest major | Released |"
-            echo "| --- | --- | --- | --- | --- |"
+            if (( majors > 0 )); then
+              echo "| Package | Current | Latest in major | Latest major | Released |"
+              echo "| --- | --- | --- | --- | --- |"
+            else
+              echo "| Package | Current | Latest in major | Released |"
+              echo "| --- | --- | --- | --- |"
+            fi
           } > "$out"
           if (( outdated > 0 )); then
             printf 'update\t%s of %s outdated\t%s of %s outdated%s\n' "$outdated" "$total" "$outdated" "$total" "${details:+, $details}" > "$status_file"
@@ -493,6 +510,7 @@ jobs:
           done
           sort -u "$work/hits.jsonl" -o "$work/hits.jsonl"
           hits=$(wc -l < "$work/hits.jsonl")
+          locked_hits=$(jq -s 'map(select(.where != "update candidate")) | length' "$work/hits.jsonl")
 
           plural() {
             if (( $1 == 1 )); then echo "$1 $2"; else echo "$1 ${2}s"; fi
@@ -515,10 +533,14 @@ jobs:
           elif (( hits == 0 )); then
             echo "**Malicious packages (osv.dev):** none of the $coverage is in the OpenSSF malicious-packages database${lock_note:+ (lockfile not checked: $lock_note)}." > "$out.tmp"
           else
+            advice="Do not update to them."
+            if (( locked_hits > 0 )); then
+              advice="Remove them before anything else."
+            fi
             {
               echo "### Malicious packages (osv.dev)"
               echo
-              echo "$hits of the $coverage are in the OpenSSF malicious-packages database${lock_note:+ (lockfile not checked: $lock_note)}. Remove them before anything else."
+              echo "$hits of the $coverage are in the OpenSSF malicious-packages database${lock_note:+ (lockfile not checked: $lock_note)}. $advice"
               echo
               echo "| Package | Version | Where | Advisory |"
               echo "| --- | --- | --- | --- |"
@@ -571,12 +593,13 @@ jobs:
             signals="no signals on the $(plural "$candidates" "update candidate")"
           fi
           # With nothing found, one line says it all; a table only when there is
-          # something to show.
+          # something to show. The summary table has the count, so the line
+          # only names the source.
           if (( hits == 0 && flagged == 0 )); then
             if [[ -z $coverage ]]; then
               echo "**Supply chain:** not applicable, $lock_note; $signals." > "$out.tmp"
             else
-              echo "**Supply chain:** none of the $coverage is in the OpenSSF malicious-packages database (osv.dev)${lock_note:+; lockfile not checked: $lock_note}; $signals." > "$out.tmp"
+              echo "**Supply chain:** no hits in the OpenSSF malicious-packages database (osv.dev)${lock_note:+; lockfile not checked: $lock_note}; $signals." > "$out.tmp"
             fi
           elif (( flagged == 0 )); then
             echo >> "$out.tmp"
@@ -594,9 +617,22 @@ jobs:
             } >> "$out.tmp"
           fi
 
-          if (( hits > 0 )); then
-            names=$(jq -r '.name' "$work/hits.jsonl" | sort -u | head -n 3 | paste -sd ',' | sed 's/,/, /g')
-            printf 'alert\t%s\t%s: %s\n' "$(plural "$hits" "malicious package")" "$(plural "$hits" "malicious package")" "${names//|/\\|}" > "$status_file.tmp"
+          # A malicious version in the lockfile is installed, so it is an alert.
+          # One that is only an update candidate is not installed yet: the
+          # issue says not to update, and the last step still fails the run.
+          # The status text starts with "malicious" in both cases; the last
+          # step relies on that.
+          # Up to three names of the hits, of the locked ones only with `locked`.
+          hit_names() {
+            jq -r --arg which "$1" 'select($which != "locked" or .where != "update candidate") | .name' "$work/hits.jsonl" |
+              sort -u | head -n 3 | paste -sd ',' | sed 's/,/, /g'
+          }
+          if (( locked_hits > 0 )); then
+            names=$(hit_names locked)
+            printf 'alert\tmalicious: %s\t%s in pnpm-lock.yaml: %s\n' "$(plural "$hits" "package")" "$(plural "$locked_hits" "malicious package")" "${names//|/\\|}" > "$status_file.tmp"
+          elif (( hits > 0 )); then
+            names=$(hit_names all)
+            printf 'warn\tmalicious: %s\tdo not update %s\n' "$(plural "$hits" "update candidate")" "${names//|/\\|}" > "$status_file.tmp"
           elif (( flagged > 0 )); then
             printf 'warn\tupdate signals\t%s of %s with signals\n' "$flagged" "$(plural "$candidates" "update")" > "$status_file.tmp"
           elif [[ -z $coverage ]]; then
@@ -630,15 +666,13 @@ jobs:
           newer=$(jq -c --arg name pnpm --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" --argjson maxmajor null \
             -f "$SRC/newer.jq" "$RUNNER_TEMP/pnpm.json")
           jq -r '
-            [ (if .inMajor then "\(.inMajor) (\(.inMajorDate))" else empty end),
-              (if .major then "\(.major) (new major, \(.majorDate))" else empty end) ] as $items
-            | if ($items | length) == 0 then "**pnpm** \(.current): up to date."
-              else "**pnpm** \(.current): \($items | join(", ")) available." end
-          ' <<<"$newer" > "$out"
-          jq -r '
             if .inMajor == null and .major == null then "ok\tup to date\t\(.current)"
-            else "update\t\(.inMajor // .major) available\t\(.current) → \(.inMajor // .major)\(if .inMajor and .major then ", new major \(.major)" else "" end)" end
+            else "update\t\(.inMajor // .major) available\t\(.current) → \(.inMajor // .major) (\(.inMajorDate // .majorDate))\(if .inMajor and .major then ", new major \(.major) (\(.majorDate))" else "" end)" end
           ' <<<"$newer" > "$status_file"
+          # The summary row holds all there is to say, so the fragment is
+          # empty. It is written after the status: an empty fragment without
+          # one reads as a disabled check, not a failed one.
+          : > "$out"
 
       - name: "Section: gitleaks"
         continue-on-error: true
@@ -672,13 +706,13 @@ jobs:
             | max_by(.tag_name | ver)
             | if . then "\(.tag_name) \(.published_at[0:10])" else "" end')
           if [[ -z $newest ]]; then
-            echo "**gitleaks** $cur: up to date." > "$out"
             printf 'ok\tup to date\t%s\n' "$cur" > "$status_file"
           else
             read -r version date <<<"$newest"
-            echo "**gitleaks** $cur: $version ($date) available." > "$out"
-            printf 'update\t%s available\t%s → %s\n' "$version" "$cur" "$version" > "$status_file"
+            printf 'update\t%s available\t%s → %s (%s)\n' "$version" "$cur" "$version" "$date" > "$status_file"
           fi
+          # Empty after the status, as in the pnpm step.
+          : > "$out"
 
       - name: "Section: Node.js"
         continue-on-error: true
@@ -711,28 +745,25 @@ jobs:
                 | "\($t.version | ltrimstr("v")) \($t.date) \(any($newer[]; (.version | ver) <= $tv and .security))"
               else "" end')
           if [[ -z $target ]]; then
-            status="up to date."
             state=ok
             summary="up to date"
             details=$cur
           else
             read -r version date security <<<"$target"
-            note=$date
             state=update
             summary="$version available"
-            details="$cur → $version"
+            details="$cur → $version ($date)"
             if [[ $security == true ]]; then
-              note="$date, includes a security release"
               state=warn
               summary="$version available, includes a security release"
               details="$details, security release"
             fi
-            status="$version ($note) available."
           fi
 
           # The update above stays on the `.nvmrc` major, so say where that major
           # is in its lifecycle and name a newer LTS major if there is one. The
-          # first two fields (phase word, end date) feed the summary row.
+          # first field (phase word) decides the state; the rest goes into the
+          # summary row, which is the only place Node.js is shown.
           curl -fsSL --retry 3 https://raw.githubusercontent.com/nodejs/Release/main/schedule.json |
             jq -r --argjson major "${cur%%.*}" --arg today "$(date -u +%F)" '
             def phase:
@@ -746,15 +777,14 @@ jobs:
                 | map(select(.lts and .lts <= $today and $today < .end))
                 | max_by(.major) ) as $lts
             | (if $s == null then "unknown" elif $today >= $s.end then "eol" else "supported" end)
-              + "\t\($s.end // "-")\t"
-              + if $s == null then "Node.js \($major) is not in the release schedule."
+              + "\t"
+              + if $s == null then "Node.js \($major) is not in the release schedule"
                 else
-                  (if $today >= $s.end then "Node.js \($major) reached end of life on \($s.end)"
-                   else "Node.js \($major) is \($s | phase), end of life \($s.end)" end)
-                  + (if $lts and $lts.major > $major then "; Node.js \($lts.major) is \($lts | phase)" else "" end)
-                  + "."
+                  (if $today >= $s.end then "end of life since \($s.end)"
+                   else "\($s | phase), end of life \($s.end)" end)
+                  + (if $lts and $lts.major > $major then " · Node.js \($lts.major) is \($lts | phase)" else "" end)
                 end' > "$RUNNER_TEMP/node-lifecycle"
-          IFS=$'\t' read -r phase end lifecycle < "$RUNNER_TEMP/node-lifecycle"
+          IFS=$'\t' read -r phase lifecycle < "$RUNNER_TEMP/node-lifecycle"
           if [[ $phase == eol ]]; then
             if [[ $state == warn ]]; then
               summary="past end of life, $summary"
@@ -762,10 +792,10 @@ jobs:
               summary="past end of life"
             fi
             state=warn
-            details="$details, end of life $end"
           fi
-          echo "**Node.js** $cur: $status $lifecycle" > "$out"
-          printf '%s\t%s\t%s\n' "$state" "$summary" "$details" > "$status_file"
+          printf '%s\t%s\t%s · %s\n' "$state" "$summary" "$details" "$lifecycle" > "$status_file"
+          # Empty after the status, as in the pnpm step.
+          : > "$out"
 
       - name: Update the dashboard issue
         run: |
@@ -776,6 +806,8 @@ jobs:
           # The caller's repo holds only a `uses:` line, so point readers at the
           # repo whose README explains the dashboard.
           source_link=" · Source: [valuecodes/automation](https://github.com/valuecodes/automation)"
+          # In the footer, so the issue opens with what needs action.
+          note="Generated by the \`$CALLER\` workflow; manual edits are overwritten."
 
           # An empty fragment with no status is a disabled check. A fragment
           # without a valid status means its step died halfway, so it counts as
@@ -799,34 +831,6 @@ jobs:
             touch "$section.failed"
           done
 
-          # The title carries the worst state, so the pinned issue tells from
-          # the issue list whether anything needs attention. The label, not the
-          # title, is how the issue is found again, so the title is free to change.
-          headline() {
-            local file state states="" updates=0
-            for file in [0-9][0-9]-*.status; do
-              state=$(cut -f 1 "$file")
-              states="$states $state"
-              if [[ $state == update ]]; then
-                updates=$(( updates + 1 ))
-              fi
-            done
-            if [[ $states == *" alert"* ]]; then
-              echo "🔴 alert"
-            elif [[ $states == *" failed"* ]]; then
-              echo "❌ check failed"
-            elif [[ $states == *" warn"* ]]; then
-              echo "⚠️ attention"
-            elif (( updates == 1 )); then
-              echo "⬆️ 1 update"
-            elif (( updates > 1 )); then
-              echo "⬆️ $updates updates"
-            else
-              echo "✅ all current"
-            fi
-          }
-          title="Maintenance dashboard: $(headline)"
-
           check_name() {
             case $1 in
               security) echo Security ;;
@@ -836,6 +840,65 @@ jobs:
               *) echo "$1" ;;
             esac
           }
+
+          # The checks in state $1, by name and in table order, joined with ", ".
+          checks_in() {
+            local file names=""
+            for file in [0-9][0-9]-*.status; do
+              if [[ $(cut -f 1 "$file") == "$1" ]]; then
+                file=${file%.status}
+                names="$names, $(check_name "${file#*-}")"
+              fi
+            done
+            echo "${names#, }"
+          }
+
+          # The title carries the worst state and names the checks in it, so the
+          # pinned issue tells from the issue list what needs attention. Counts
+          # stay out, so the title changes with the state, not with every new
+          # advisory. The label, not the title, is how the issue is found again,
+          # so the title is free to change.
+          headline() {
+            local file names updates=0
+            names=$(checks_in alert)
+            if [[ -n $names ]]; then
+              # Supply chain is only an alert for a malicious package in the
+              # lockfile, so the title says that instead of a vague word.
+              names=${names/Supply chain/malicious package in lockfile}
+              names=${names/Security/Security alert}
+              echo "🔴 $names"
+              return
+            fi
+            names=$(checks_in failed)
+            if [[ $names == *,* ]]; then
+              echo "❌ $names checks failed"
+              return
+            elif [[ -n $names ]]; then
+              echo "❌ $names check failed"
+              return
+            fi
+            names=$(checks_in warn)
+            if [[ $names == *,* ]]; then
+              echo "⚠️ $names need attention"
+              return
+            elif [[ -n $names ]]; then
+              echo "⚠️ $names needs attention"
+              return
+            fi
+            for file in [0-9][0-9]-*.status; do
+              if [[ $(cut -f 1 "$file") == update ]]; then
+                updates=$(( updates + 1 ))
+              fi
+            done
+            if (( updates == 1 )); then
+              echo "⬆️ 1 update"
+            elif (( updates > 1 )); then
+              echo "⬆️ $updates updates"
+            else
+              echo "✅ all current"
+            fi
+          }
+          title="Maintenance dashboard: $(headline)"
           # The one place that pairs a state with its emoji and word. The word is
           # fixed per state, so the Status column reads the same in every row and
           # still makes sense where emoji do not render.
@@ -852,13 +915,15 @@ jobs:
 
           # Alert blocks for what needs action; nothing when there is nothing to say.
           alerts() {
-            local state text details file failed=() node_warning=""
+            local state text details file failed=() warnings=()
             if [[ -f 15-supply-chain.status ]]; then
               IFS=$'\t' read -r state text details < 15-supply-chain.status
               if [[ $state == alert ]]; then
                 echo "> [!CAUTION]"
-                echo "> $details in \`pnpm-lock.yaml\` or among the update candidates, see Supply chain below."
+                echo "> $details. See Supply chain below."
                 echo
+              elif [[ $state == warn && $text == malicious* ]]; then
+                warnings+=("Supply chain: malicious update candidate, $details. See Supply chain below.")
               fi
             fi
             if [[ -f 10-security.status ]]; then
@@ -873,25 +938,20 @@ jobs:
               file=${file%.failed}
               failed+=("$(check_name "${file#*-}")")
             done
+            if (( ${#failed[@]} > 0 )); then
+              text=$(printf '%s, ' "${failed[@]}")
+              warnings=("Checks failed: ${text%, }. See [the latest run]($RUNS_URL)." "${warnings[@]}")
+            fi
             if [[ -f 50-node.status ]]; then
               IFS=$'\t' read -r state text details < 50-node.status
               if [[ $state == warn ]]; then
-                node_warning="Node.js: $details, see Node.js below."
+                warnings+=("Node.js: $text.")
               fi
             fi
-            if (( ${#failed[@]} > 0 )) || [[ -n $node_warning ]]; then
+            if (( ${#warnings[@]} > 0 )); then
               echo "> [!WARNING]"
-              if (( ${#failed[@]} > 0 )); then
-                text=$(printf '%s, ' "${failed[@]}")
-                echo "> Checks failed: ${text%, }. See [the latest run]($RUNS_URL)."
-              fi
-              if [[ -n $node_warning ]]; then
-                # A bare `>` line keeps the two warnings in separate paragraphs.
-                if (( ${#failed[@]} > 0 )); then
-                  echo ">"
-                fi
-                echo "> $node_warning"
-              fi
+              # A bare `>` line keeps the warnings in separate paragraphs.
+              printf '> %s\n>\n' "${warnings[@]}" | head -n -1
               echo
             fi
           }
@@ -899,8 +959,6 @@ jobs:
           # The body with at most $1 catalog rows.
           build() {
             local keep=$1 file rows total state text details
-            echo "Generated by the \`$CALLER\` workflow; manual edits are overwritten."
-            echo
             alerts
             echo "| Check | Status | Details |"
             echo "| --- | --- | --- |"
@@ -961,6 +1019,8 @@ jobs:
             echo
             echo "---"
             echo "Last changed: $(date -u +%Y-%m-%d) · [Workflow runs]($RUNS_URL)$source_link"
+            echo
+            echo "$note"
             echo "$marker"
           } > "$RUNNER_TEMP/body.md"
 
@@ -980,13 +1040,13 @@ jobs:
             if [[ $numbers == *$'\n'* ]]; then
               echo "::warning::Several open issues carry the maintenance-dashboard label; editing #$number and leaving the rest."
             fi
-            # Unchanged means the same title, content, source link and marker, so
-            # a hand edit is overwritten and an issue from before the link gains
-            # it once. Editing the title does not notify anyone either.
+            # Unchanged means the same title, content, footer and marker, so a
+            # hand edit is overwritten and an issue with an older footer gains
+            # the current one once. Editing the title does not notify anyone either.
             gh issue view "$number" --repo "$REPO" --json title,body > "$RUNNER_TEMP/issue.json"
             existing_title=$(jq -r .title "$RUNNER_TEMP/issue.json")
             existing=$(jq -r .body "$RUNNER_TEMP/issue.json" | tr -d '\r')
-            if [[ $existing_title == "$title" && $existing == "$content"$'\n\n---\nLast changed: '*"$source_link"$'\n'"$marker" ]]; then
+            if [[ $existing_title == "$title" && $existing == "$content"$'\n\n---\nLast changed: '*"$source_link"$'\n\n'"$note"$'\n'"$marker" ]]; then
               echo "Issue #$number is unchanged."
             else
               gh issue edit "$number" --repo "$REPO" --title "$title" --body-file "$RUNNER_TEMP/body.md" > /dev/null
@@ -1007,8 +1067,9 @@ jobs:
           fi
           # Unlike `pnpm audit` findings, a known-malicious package is an
           # incident, and a red scheduled run is the only notification
-          # `GITHUB_TOKEN` can send.
-          if [[ -f 15-supply-chain.status && $(cut -f 1 15-supply-chain.status) == alert ]]; then
+          # `GITHUB_TOKEN` can send. That holds for an update candidate too,
+          # whose state is only a warning, so this reads the status text.
+          if [[ -f 15-supply-chain.status && $(cut -f 2 15-supply-chain.status) == malicious* ]]; then
             echo "::error::$(cut -f 3 15-supply-chain.status). See the Supply chain section of the dashboard."
             exit 1
           fi
