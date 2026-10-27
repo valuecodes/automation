@@ -20,25 +20,29 @@ plus each update the dependency table lists, is looked up on [osv.dev](https://o
 carries the OpenSSF [malicious-packages](https://github.com/ossf/malicious-packages) feed that
 `pnpm audit` does not see; git and tarball dependencies have no registry version and are only
 counted. A hit is an incident, so it also makes the run red, the one notification the workflow
-can send. For each listed update the npm registry data is read for signs of a hijacked account:
+can send. A hit in the lockfile is an alert; a hit that is only a listed update is a warning
+not to update, since that version is not installed. For each listed update the npm registry data is read for signs of a hijacked account:
 provenance attestations dropped since the version in use, a different publisher, a publisher
 who is not a maintainer, or the first release after more than a year. Missing provenance alone
 is not reported, since most of npm has none.
 
-Node.js updates stay on the `.nvmrc` major, so the Node.js line also gives that major's phase and
+Node.js updates stay on the `.nvmrc` major, so the Node.js row also gives that major's phase and
 end-of-life date from the [release schedule](https://github.com/nodejs/Release), and names a newer
-LTS major when there is one: "Node.js 22 is in maintenance, end of life 2027-04-30; Node.js 24 is
-Active LTS."
+LTS major when there is one: "22.21.0 · in maintenance, end of life 2027-04-30 · Node.js 24 is
+Active LTS".
 
 The body opens with a summary table, one row per check with a fixed status word (✅ ok,
 ⬆️ update, ⚠️ attention, 🔴 alert, ⚪ n/a, ❌ failed) and the one detail that matters: a count,
-a version or a reason. The title carries the worst of those states in the same words, with the
-number of checks that have updates (`Maintenance dashboard: ⬆️ 2 updates`), so the pinned
-issue shows from the issue list whether anything needs attention. An alert box above the table
-calls out malicious packages, `pnpm audit` findings, failed checks, and a Node.js security
-release or end of life. The sections with the details follow: the security table marks each
-severity (🟥 critical, 🟧 high, 🟨 moderate, ⬜ low and info) and the dependency table marks a
-new major with ⚠️.
+a version with its release date, or a reason. pnpm, gitleaks and Node.js fit in their row and
+get no section. The title carries the worst of those states and names the checks in it
+(`Maintenance dashboard: 🔴 Security alert`, `⚠️ Node.js needs attention`), or the number of
+checks that have updates (`⬆️ 2 updates`), so the pinned issue shows from the issue list what
+needs attention. A malicious package in the lockfile titles the issue
+`🔴 malicious package in lockfile`. An alert box above the table calls out malicious packages,
+`pnpm audit` findings, failed checks, and a Node.js security release or end of life. The
+sections with the details follow, each fact said once: the security table has one row per
+package, path and fix, marks each severity (🟥 critical, 🟧 high, 🟨 moderate, ⬜ low and info)
+and lists every advisory that row fixes; the dependency table marks a new major with ⚠️.
 
 The workflow never changes code: no PRs, no commits. Doing the updates stays manual. Every run
 recomputes the title and the whole body and edits the issue only when they changed, so the edit
