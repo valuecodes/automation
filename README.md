@@ -113,7 +113,7 @@ dashboard lists on the current major. Each kind is its own job, so a failure nam
 - Commits go through the API, so they are signed and no credentials touch a checkout.
 - A PR changes only the files in the table, so any other mention of the exact version goes
   stale. In docs, name the major and point at the file that holds the exact version, such as
-  "Node.js 24 (exact version in `.nvmrc`)". Update a pin outside the repo, such as a hosting
+  "Node.js 26 (exact version in `.nvmrc`)". Update a pin outside the repo, such as a hosting
   build variable, by hand.
 
 Supply chain guards:

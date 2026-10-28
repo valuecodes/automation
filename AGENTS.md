@@ -29,7 +29,7 @@ how a run decides, and the caller snippet. Keep it in step with the workflow.
 
 ## Commands
 
-**Prerequisites:** Node.js 24 (exact version in `.nvmrc`), pnpm 12 (exact version in
+**Prerequisites:** Node.js 26 (exact version in `.nvmrc`), pnpm 12 (exact version in
 `packageManager` in `package.json`).
 
 ```bash
