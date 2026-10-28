@@ -118,7 +118,9 @@ Supply chain guards:
   least `min-release-age-days` × 1440) and `trustPolicy: no-downgrade`, which hold the
   transitive versions pnpm picks to the same rules.
 - The lockfile is resolved with `--lockfile-only --ignore-scripts --ignore-pnpmfile`, in a
-  checkout without credentials or token: nothing is installed and no repo code runs.
+  checkout without credentials or token: nothing is installed and no repo code runs. The pnpm
+  that resolves is the one the repo already pins, never the proposed one; for a pnpm update,
+  any lockfile change beyond pnpm's own entries stops the run.
 - Every version an update adds is looked up on osv.dev. A malicious hit opens no PR, closes the
   open one and makes the run red.
 - A package with an update signal is left out and listed in the PR. Nothing auto-merges.
@@ -150,7 +152,8 @@ summary.
 1. Turn on **Allow GitHub Actions to create and approve pull requests** under Settings →
    Actions → General (in the organization's settings too, for a repo in an organization).
    Without it, opening a PR fails and the run says so.
-2. Add the caller below. The caller job must grant the four permissions itself.
+2. Add the caller below. The caller job must grant the four permissions itself, including
+   `actions: write` without `ci-workflow`: a called workflow's job permissions are fixed.
 3. Give the CI workflow named in `ci-workflow` an `on: workflow_dispatch:` trigger.
 
 ```yaml

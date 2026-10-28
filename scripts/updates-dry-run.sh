@@ -17,7 +17,9 @@
 # the real registries and osv.dev, never pushes or touches a PR. Each kind's
 # work files and summary land in tmp/updates/<owner>-<repo>/<kind>/ (ignored by
 # git), and the summaries are printed. The exit code is 1 when any step failed,
-# which includes a malicious version found on osv.dev.
+# which includes a malicious version found on osv.dev. The steps get your full
+# gh token, not a scoped one; nothing writes because every write in the
+# workflow sits behind `DRY_RUN`, so keep it that way when changing a step.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -117,7 +119,19 @@ run_kind() {
     git init -q "$checkout"
     git -C "$checkout" fetch -q --depth 1 "https://github.com/$REPO.git" "$base_sha"
     git -C "$checkout" checkout -q FETCH_HEAD
-    run_step "Lockfile: resolve" "$checkout" || return 0
+    # Like pnpm/action-setup, the step gets the pnpm the repo pins. A local
+    # pnpm behind corepack would follow the edited `packageManager` instead,
+    # which the step refuses.
+    local pinned
+    pinned=$(jq -r '.packageManager // "" | capture("^pnpm@(?<v>[0-9]+\\.[0-9]+\\.[0-9]+)").v // empty' "$checkout/package.json")
+    if [[ -z $pinned ]]; then
+      echo "::error::$REPO's package.json does not pin pnpm." >&2
+      exit 1
+    fi
+    mkdir -p "$RUNNER_TEMP/bin"
+    printf '#!/usr/bin/env bash\nexec npx -y "pnpm@%s" "$@"\n' "$pinned" > "$RUNNER_TEMP/bin/pnpm"
+    chmod +x "$RUNNER_TEMP/bin/pnpm"
+    PATH="$RUNNER_TEMP/bin:$PATH" run_step "Lockfile: resolve" "$checkout" || return 0
   fi
   run_step "Check the new versions on osv.dev" "$RUNNER_TEMP" || return 0
   run_step "Open or update the PR" "$RUNNER_TEMP" || return 0

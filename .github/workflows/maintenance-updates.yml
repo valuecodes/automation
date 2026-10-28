@@ -86,6 +86,12 @@ jobs:
             echo "::error::min-release-age-days must be a whole number, got '$MIN_AGE_DAYS'."
             exit 1
           fi
+          # The script path lands in an API URL and in local paths, so it must
+          # be a plain relative path.
+          if [[ -n $GITLEAKS_SCRIPT ]] && { [[ ! $GITLEAKS_SCRIPT =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || [[ /$GITLEAKS_SCRIPT/ == */../* || /$GITLEAKS_SCRIPT/ == */./* ]]; }; then
+            echo "::error::gitleaks-script must be a relative path such as .github/scripts/secrets-scan.sh, got '$GITLEAKS_SCRIPT'."
+            exit 1
+          fi
           if [[ -n $CI_WORKFLOW && ! $CI_WORKFLOW =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
             echo "::error::ci-workflow must be a workflow file name such as ci.yml, got '$CI_WORKFLOW'."
             exit 1
@@ -214,14 +220,18 @@ jobs:
             exit 0
           fi
           read -r version date security <<<"$target"
-          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Unexpected version '$version' in the Node.js release index."
+          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ! $date =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "::error::Unexpected version '$version' or date '$date' in the Node.js release index."
             exit 1
           fi
           major=${cur%%.*}
+          # The schedule's dates land in the PR body, so an entry whose dates
+          # are not plain dates counts as missing.
           lifecycle=$(curl -fsSL --retry 3 https://raw.githubusercontent.com/nodejs/Release/main/schedule.json |
             jq -r --argjson major "$major" --arg today "$(date -u +%F)" '
-              .["v\($major)"] as $s
+              def date: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
+              .["v\($major)"]
+              | (if . != null and (.end | date) and ([.maintenance, .lts] | all(. == null or date)) then . else null end) as $s
               | if $s == null then "Node.js \($major) is not in the release schedule"
                 elif $today >= $s.end then "past end of life since \($s.end)"
                 elif $s.maintenance and $today >= $s.maintenance then "in maintenance, end of life \($s.end)"
@@ -304,16 +314,7 @@ jobs:
             'if (split($a) | length) != 2 then error("package.json holds \($a) more than once") else split($a) | join($b) end' \
             "$SRC/package.json" > "$OUT/new/package.json"
           echo package.json > "$OUT/paths"
-          # The lockfile step runs this pnpm to resolve the lockfile, so it is
-          # checked on osv.dev before that, not only with the other new versions.
-          mal=$(jq -nc --arg v "$version" '{package: {name: "pnpm", ecosystem: "npm"}, version: $v}' |
-            curl -fsSL --retry 3 -X POST -H 'Content-Type: application/json' --data-binary @- https://api.osv.dev/v1/query |
-            jq -r 'if .next_page_token then error("osv.dev paginated a single query") else [.vulns[]?.id | select(test("^MAL-[0-9]+-[0-9]+$"))] | join(", ") end')
-          if [[ -n $mal ]]; then
-            echo "::error::osv.dev lists pnpm $version as malicious: $mal."
-            printf 'blocked\nosv.dev lists pnpm %s as malicious (%s)\n' "$version" "$mal" > "$OUT/state"
-            exit 0
-          fi
+          jq -nc --arg v "$version" '{name: "pnpm", version: $v}' > "$OUT/osv-queries.jsonl"
           echo "RESOLVE=true" >> "$GITHUB_ENV"
           echo "Update pnpm to $version" > "$OUT/title"
           {
@@ -419,7 +420,15 @@ jobs:
           if [[ ! -f $SRC/pnpm-workspace.yaml ]]; then
             na "no pnpm-workspace.yaml"
           fi
-          yq -o=json '.catalog // {}' "$SRC/pnpm-workspace.yaml" > "$work/catalog.json"
+          # Keys become registry URLs in a curl config file, so anything that is
+          # not an npm package name is left out instead of quoted.
+          yq -o=json '.catalog // {}' "$SRC/pnpm-workspace.yaml" |
+            jq 'with_entries(select(.key | test("^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$")))' > "$work/catalog.json"
+          invalid=$(yq '.catalog // {} | length' "$SRC/pnpm-workspace.yaml")
+          invalid=$(( invalid - $(jq 'length' "$work/catalog.json") ))
+          if (( invalid > 0 )); then
+            echo "::warning::$invalid catalog entries are not npm package names and were skipped."
+          fi
           total=$(jq 'length' "$work/catalog.json")
           if [[ $total == 0 ]]; then
             na "no catalog: in pnpm-workspace.yaml"
@@ -537,8 +546,10 @@ jobs:
               echo "::error::The checkout's package.json is not the one the update was built from."
               exit 1
             fi
-            # pnpm switches to the version in `packageManager` by itself, so the
-            # resolution below runs the new pnpm, checked on osv.dev already.
+            # pnpm would switch to the version in `packageManager` and run it;
+            # `pm-on-fail=warn` below keeps the pnpm the repo already pins, which
+            # still writes the new pin from registry metadata. The new pnpm never
+            # runs here; its versions go through osv.dev like any other.
             cp "$OUT/new/package.json" package.json
             allowed='^ M (package\.json|pnpm-lock\.yaml)$'
           else
@@ -609,8 +620,15 @@ jobs:
 
           # Resolves without installing: nothing is downloaded or unpacked, and
           # neither lifecycle scripts nor `.pnpmfile.cjs` run. CI sets
-          # `--frozen-lockfile` by default, so it is turned off here.
-          if ! pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile; then
+          # `--frozen-lockfile` by default, so it is turned off here. The pnpm
+          # that runs must be the one the repo pinned before this update.
+          trusted=$(git show HEAD:package.json | jq -r '.packageManager | capture("^pnpm@(?<v>[0-9.]+)").v')
+          ran=$(pnpm --config.pm-on-fail=warn --version)
+          if [[ $ran != "$trusted" ]]; then
+            echo "::error::pnpm $ran would resolve the lockfile, not the pinned $trusted."
+            exit 1
+          fi
+          if ! pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.pm-on-fail=warn; then
             echo "::error::pnpm could not resolve the lockfile for the $KIND update (see above); the dashboard still lists it."
             exit 1
           fi
@@ -637,9 +655,17 @@ jobs:
               echo "::error::pnpm-lock.yaml pins pnpm '$pinned' after resolving, not $version."
               exit 1
             fi
-            others=$(jq -r 'select(.name != "pnpm" and (.name | startswith("@pnpm/") | not)) | "\(.name)@\(.version)"' "$work/new.jsonl")
-            if [[ -n $others ]]; then
-              echo "::error::Resolving for pnpm $version also changed other packages: $others"
+            # The whole lockfile, not only its keys, must be unchanged apart
+            # from pnpm's own pin and packages.
+            strip() {
+              yq ea -o=json '[.]' "$1" | jq '
+                def mine: test("^/?(pnpm|@pnpm/[^@/]+)@");
+                map(del(.importers["."].packageManagerDependencies)
+                  | if .packages then .packages |= with_entries(select(.key | mine | not)) else . end
+                  | if .snapshots then .snapshots |= with_entries(select(.key | mine | not)) else . end)'
+            }
+            if [[ $(strip "$work/before.yaml") != "$(strip pnpm-lock.yaml)" ]]; then
+              echo "::error::Resolving for pnpm $version changed more of pnpm-lock.yaml than pnpm's own entries."
               exit 1
             fi
             jq -c '{name, version}' "$work/new.jsonl" >> "$OUT/osv-queries.jsonl"
@@ -821,7 +847,9 @@ jobs:
           # bot author alone is not enough, since any workflow using
           # `GITHUB_TOKEN` commits as it, so the commit must also carry this
           # kind's trailer. Anyone else's commit or merge means someone is
-          # working on it, so the branch and its PR are left alone.
+          # working on it, so the branch and its PR are left alone. This guards
+          # against overwriting work, not against anyone with push access, who
+          # can forge both.
           ours() {
             gh api "repos/$REPO/compare/$BASE_SHA...$1" > "$RUNNER_TEMP/compare.json"
             jq -e --arg trailer "Maintenance-Updates: $KIND" '
