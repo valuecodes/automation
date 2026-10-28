@@ -8,73 +8,40 @@ month for releases at least 14 days old; callers get those bumps only when they 
 
 ## `maintenance-dashboard.yml`
 
-Keeps one issue per repo, labelled `maintenance-dashboard` and titled
-`Maintenance dashboard: <state>`, that lists what is due: dependency updates for the `catalog:`
-in `pnpm-workspace.yaml`, pnpm (`packageManager`), gitleaks (`GITLEAKS_VERSION` in the
-secrets-scan script), Node.js (`.nvmrc`) and `pnpm audit` findings. Like pnpm's `minimumReleaseAge`, a release is listed only once it is
-`min-release-age-days` old (default 14); prereleases never are. A check whose source file is
-missing shows as "not applicable".
+Keeps one issue per repo (label `maintenance-dashboard`) that lists what is due. It never
+changes code; for PRs, add [`maintenance-updates.yml`](#maintenance-updatesyml) too.
 
-A supply chain section adds two checks that need no token. Every version in `pnpm-lock.yaml`,
-plus each update the dependency table lists, is looked up on [osv.dev](https://osv.dev), which
-carries the OpenSSF [malicious-packages](https://github.com/ossf/malicious-packages) feed that
-`pnpm audit` does not see; git and tarball dependencies have no registry version and are only
-counted. A hit is an incident, so it also makes the run red, the one notification the workflow
-can send. A hit in the lockfile is an alert; a hit that is only a listed update is a warning
-not to update, since that version is not installed. For each listed update the npm registry data is read for signs of a hijacked account:
-provenance attestations dropped since the version in use, a different publisher, a publisher
-who is not a maintainer, or the first release after more than a year. Missing provenance alone
-is not reported, since most of npm has none.
+| Check        | Source                                   | Shows                                                      |
+| ------------ | ---------------------------------------- | ---------------------------------------------------------- |
+| Security     | `pnpm audit` on the lockfile             | Advisories by severity, one row per package, path and fix  |
+| Supply chain | [osv.dev](https://osv.dev), npm registry | Malicious versions; signs of a hijacked account on updates |
+| Dependencies | `catalog:` in `pnpm-workspace.yaml`      | Newer versions; ⚠️ marks a new major                       |
+| pnpm         | `packageManager` in `package.json`       | Newer pnpm                                                 |
+| gitleaks     | `GITLEAKS_VERSION` in the secrets script | Newer gitleaks                                             |
+| Node.js      | `.nvmrc`                                 | Newer release on the major, its end of life, newer LTS     |
 
-Node.js updates stay on the `.nvmrc` major, so the Node.js row also gives that major's phase and
-end-of-life date from the [release schedule](https://github.com/nodejs/Release), and names a newer
-LTS major when there is one: "22.21.0 · in maintenance, end of life 2027-04-30 · Node.js 24 is
-Active LTS".
+- A release is listed once it is `min-release-age-days` old (default 14), never a prerelease.
+  Node.js security releases are listed right away.
+- The title names the worst state (`🔴 Security alert`, `⚠️ Node.js needs attention`,
+  `⬆️ 2 updates`, `✅ all current`), so the pinned issue reads from the issue list.
+- The supply chain check looks up every locked version and listed update in the OpenSSF
+  [malicious-packages](https://github.com/ossf/malicious-packages) feed, which `pnpm audit`
+  does not see. A hit also makes the run red, the one alert the workflow can send. The update
+  signals are: provenance dropped, a new publisher, a publisher who is not a maintainer, or
+  the first release in over a year.
+- Each run rebuilds the body and edits the issue only when it changed. A closed issue is
+  recreated. A missing source file shows "not applicable"; a broken check shows "check failed"
+  and makes the run red.
+- Only `GITHUB_TOKEN`: the `audit` job runs `pnpm audit` from the lockfile without installing
+  or running repo code, and the files are read through the REST API.
 
-The body opens with a summary table, one row per check with a fixed status word (✅ ok,
-⬆️ update, ⚠️ attention, 🔴 alert, ⚪ n/a, ❌ failed) and the one detail that matters: a count,
-a version with its release date, or a reason. pnpm, gitleaks and Node.js fit in their row and
-get no section. The title carries the worst of those states and names the checks in it
-(`Maintenance dashboard: 🔴 Security alert`, `⚠️ Node.js needs attention`), or the number of
-checks that have updates (`⬆️ 2 updates`), so the pinned issue shows from the issue list what
-needs attention. A malicious package in the lockfile titles the issue
-`🔴 malicious package in lockfile`. An alert box above the table calls out malicious packages,
-`pnpm audit` findings, failed checks, and a Node.js security release or end of life. The
-sections with the details follow, each fact said once: the security table has one row per
-package, path and fix, marks each severity (🟥 critical, 🟧 high, 🟨 moderate, ⬜ low and info)
-and lists every advisory that row fixes; the dependency table marks a new major with ⚠️.
+To see the body for a repo without touching its issue, run
+`scripts/dashboard-dry-run.sh owner/repo <commit> <checkout>`.
 
-The workflow never changes code: no PRs, no commits. To get PRs for the updates on the current
-major, add [`maintenance-updates.yml`](#maintenance-updatesyml) as well. Every run
-recomputes the title and the whole body and edits the issue only when they changed, so the edit
-history shows real changes. Editing an issue notifies nobody; urgent security findings still arrive
-through Dependabot alerts, but a Node.js security release (listed right away, without the
-cooldown, and flagged when any release in the range is one) only shows up here. If someone closes
-the issue, the next run creates a new one.
-
-The `audit` job checks out the repo to run `pnpm audit` from the lockfile alone (no install, and
-`--ignore-pnpmfile` so no repo code runs) and to list the locked packages for the osv.dev check.
-The repo files and the gitleaks releases are read through the REST API with `GITHUB_TOKEN`; the
-npm registry, osv.dev, nodejs.org and the Node.js release schedule are public endpoints, called
-without a token. A broken check makes the run red and shows "check failed" in its section; the
-other sections still render. To see the title and body for a repo without touching its issue, run
-`scripts/dashboard-dry-run.sh owner/repo <commit> <checkout>` from a clone of this repo; it exits
-non-zero when a step failed. This repo's own CI runs the workflow the same way, in dry-run mode
-against this repo.
-
-What the checks assume:
-
-- Only the default `catalog:` of `pnpm-workspace.yaml` is read; named `catalogs:` and versions
-  written straight into `package.json` are not checked.
-- A leading `^` or `~` in a catalog spec is ignored; any other range shows as "not an exact
-  version".
-- `@types/node` is only offered up to the major in `.nvmrc`.
-- `pnpm-lock.yaml` must be lockfile version 6 or 9.
-- `.nvmrc` must hold an exact version (`24.22.1`); `24` or `lts/*` fail the Node.js check.
-- The gitleaks script must contain a line that starts with `GITLEAKS_VERSION="x.y.z"`.
-- The issue body is limited to 60,000 characters: dependency rows beyond that are cut with a
-  pointer to the run summary, which always has the full body.
-- The label's colour and description are reset on every run.
+Assumptions: only the default `catalog:` is read, with a leading `^` or `~` ignored;
+`@types/node` is capped at the `.nvmrc` major; the lockfile is version 6 or 9; `.nvmrc` holds an
+exact version; the gitleaks script has a `GITLEAKS_VERSION="x.y.z"` line. The issue body is cut
+to 60,000 characters, and the run summary has the full body.
 
 ### How a run decides
 
@@ -90,10 +57,6 @@ flowchart LR
     G -- yes --> H[Edit the lowest<br>number]
     G -- no --> Z[Skip]
 ```
-
-A step that fails says "check failed" in its section and the others still render. The full
-body always goes to the run summary, with catalog rows cut to fit the issue. A failed check
-or a malicious package makes the run red.
 
 ### Setup in the calling repo
 
@@ -130,69 +93,43 @@ Inputs:
 
 ## `maintenance-updates.yml`
 
-Keeps one PR per update kind open, each on its own branch `maintenance-updates/<kind>` with the
-label `maintenance-updates`:
+Keeps one PR per kind open, on the branch `maintenance-updates/<kind>`, for the updates the
+dashboard lists on the current major. Each kind is its own job, so a failure names its cause.
 
-- **node**: `.nvmrc` to the newest release on its major.
-- **pnpm**: `packageManager` in `package.json` to the newest pnpm on its major, with the hash
-  (`+sha512.…`) replaced by the npm registry's integrity for that version when there is one.
-- **gitleaks**: `GITLEAKS_VERSION` in the secrets-scan script to the newest release on its
-  major, and `GITLEAKS_DIGEST`, when the script pins one, to the digest ghcr.io serves for the
-  new tag.
-- **catalog**: each `catalog:` entry in `pnpm-workspace.yaml` to the newest version on its
-  major, and `pnpm-lock.yaml` resolved to match.
+| Kind (job) | Changes                                                                        |
+| ---------- | ------------------------------------------------------------------------------ |
+| `node`     | `.nvmrc`                                                                       |
+| `pnpm`     | `packageManager`, with its `+sha512` hash from the npm registry                |
+| `gitleaks` | `GITLEAKS_VERSION`, and `GITLEAKS_DIGEST` from ghcr.io when the script pins it |
+| `catalog`  | `catalog:` entries in `pnpm-workspace.yaml`, and `pnpm-lock.yaml` to match     |
 
-The versions follow the dashboard's rules: a release is proposed once it is
-`min-release-age-days` old (Node.js security releases right away), never a prerelease, and new
-majors stay on the dashboard for a person to decide. Each run recomputes every update from the
-head of the default branch and updates its PR in place: a new commit when the update or the
-base changed, a new title and body when they changed, nothing otherwise. When an update is no
-longer due (done by hand, or its file is gone), its PR is closed and the branch deleted. A PR
-someone closed without merging stays closed until the proposed update changes. A branch with a
-commit this workflow did not make is never touched, so fixes pushed to a PR are safe; the run
-only warns. The REST API cannot update a branch only if it is unchanged, so a push in the few
-seconds between the check and the update can be lost.
+- Same rules as the dashboard: `min-release-age-days` old, no prereleases, majors stay on the
+  dashboard.
+- Each run updates the PRs in place, from the head of the default branch. A PR is closed when
+  its update is no longer due. A PR someone closed stays closed until the update changes.
+- A branch with someone else's commit is left alone, so fixes pushed to a PR are safe.
+- PR titles are plain sentences (`Update Node.js to 24.23.0`); commits use
+  `chore: update Node.js to 24.23.0`. The body follows the dashboard's style.
+- Commits go through the API, so they are signed and no credentials touch a checkout.
 
-The PR title is a plain sentence (`Update Node.js to 24.23.0`); the commit uses this repo's
-convention (`chore: update Node.js to 24.23.0`). The body follows the dashboard: an alert box
-when one is due (a Node.js security release, packages left out), a table, the release notes,
-the same footer, and a link to the dashboard issue when one is open.
+Supply chain guards:
 
-Commits are made through the git data API, so GitHub signs them and no credentials touch a
-checkout. Only the catalog job checks out the repo, without credentials, to run
-`pnpm install --lockfile-only --ignore-scripts --ignore-pnpmfile`: pnpm resolves the new lockfile
-without downloading packages or running any repo code, and the step has no token.
+- `catalog` runs only when the caller's `pnpm-workspace.yaml` sets `minimumReleaseAge` (at
+  least `min-release-age-days` × 1440) and `trustPolicy: no-downgrade`, which hold the
+  transitive versions pnpm picks to the same rules.
+- The lockfile is resolved with `--lockfile-only --ignore-scripts --ignore-pnpmfile`, in a
+  checkout without credentials or token: nothing is installed and no repo code runs.
+- Every version an update adds is looked up on osv.dev. A malicious hit opens no PR, closes the
+  open one and makes the run red.
+- A package with an update signal is left out and listed in the PR. Nothing auto-merges.
 
-Supply chain guards, since the PR changes what CI and then production install:
+CI: a PR opened with `GITHUB_TOKEN` does not start `pull_request` workflows. Set `ci-workflow`
+to a workflow with `on: workflow_dispatch:`, and the run starts it on each pushed branch. Keep
+that CI free of secrets, since it runs the new versions.
 
-- The catalog job runs only when the caller's `pnpm-workspace.yaml` sets `minimumReleaseAge` to
-  at least `min-release-age-days` × 1440 minutes and `trustPolicy: no-downgrade`. pnpm picks
-  the transitive versions itself, and those two settings are what hold them to the cooldown and
-  stop a release with weaker provenance than an earlier one. Without them the job shows "not
-  applicable".
-- Every version an update adds (the pnpm release, or each new version in the lockfile) is looked
-  up on osv.dev in the OpenSSF malicious-packages feed. A hit opens no PR, closes the open one
-  and makes the run red.
-- An update with one of the dashboard's update signals (provenance dropped, a new publisher, a
-  publisher who is not a maintainer, the first release in over a year) is left out and listed
-  in the PR body.
-- The PR body lists the new lockfile versions (the first 100; the run summary has all of them).
-  Nothing is merged automatically.
-
-A PR opened with `GITHUB_TOKEN` does not start the caller's `pull_request` workflows. Set
-`ci-workflow` to the caller's CI file and give that workflow an `on: workflow_dispatch:`
-trigger: after each push the run starts it on the PR branch, and its checks show on the PR.
-Keep that CI at `contents: read` with no secrets on the path that installs and runs the code,
-since it runs the new versions. Without `ci-workflow`, close and reopen the PR to run CI.
-
-To see the PRs a repo would get without pushing anything, run
-`scripts/updates-dry-run.sh owner/repo [kind...]` from a clone of this repo; it exits non-zero
-when a step failed or a malicious version was found.
+To see the PRs a repo would get, run `scripts/updates-dry-run.sh owner/repo [kind...]`.
 
 ### How a run decides
-
-Each kind runs as its own job (`maintenance-updates / node`, `/ pnpm`, `/ gitleaks`,
-`/ catalog`), so a failure names its cause and does not hold back the others.
 
 ```mermaid
 flowchart LR
@@ -206,8 +143,7 @@ flowchart LR
 ```
 
 A dry run stops after the osv.dev check and writes the planned PR and its diff to the run
-summary. The branch moves only when the update or the base changed, and the title and body are
-edited only when they changed. `ci-workflow` starts only when the branch moved or the PR is new.
+summary.
 
 ### Setup in the calling repo
 

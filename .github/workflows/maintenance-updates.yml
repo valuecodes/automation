@@ -102,8 +102,9 @@ jobs:
           caller=${WORKFLOW_REF%@*}
           caller=${caller#"$REPO/"}
           # The pinned dashboard issue, linked from each PR body when there is one.
+          # The link is optional, so a repo with issues turned off still runs.
           dashboard=$(gh issue list --repo "$REPO" --label maintenance-dashboard --state open \
-            --json number --jq 'sort_by(.number) | .[0].number // empty')
+            --json number --jq 'sort_by(.number) | .[0].number // empty' 2> /dev/null || true)
           printf 'SRC=%s\nOUT=%s\nBASE=%s\nBASE_SHA=%s\nCALLER=%s\nRUNS_URL=%s\nDASHBOARD=%s\n' \
             "$SRC" "$OUT" "$base" "$base_sha" "$caller" "$SERVER_URL/$REPO/actions/workflows/${caller##*/}" "$dashboard" >> "$GITHUB_ENV"
           echo "base-sha=$base_sha" >> "$GITHUB_OUTPUT"
@@ -331,7 +332,8 @@ jobs:
             printf 'na\n%s is not in the repo\n' "$GITLEAKS_SCRIPT" > "$OUT/state"
             exit 0
           fi
-          cur=$(grep -oE '^GITLEAKS_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$SRC/gitleaks-script" | head -n 1 | cut -d '"' -f 2)
+          # No match is not a grep failure here; the empty result says it.
+          cur=$({ grep -oE '^GITLEAKS_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$SRC/gitleaks-script" || true; } | head -n 1 | cut -d '"' -f 2)
           if [[ -z $cur ]]; then
             echo "::error::$GITLEAKS_SCRIPT has no GITLEAKS_VERSION=\"x.y.z\" line."
             exit 1
@@ -362,7 +364,7 @@ jobs:
           # a re-pushed tag cannot change what runs. The new digest is the one
           # ghcr.io serves for the new tag, read anonymously.
           digest_note=""
-          old_digest=$(grep -oE '^GITLEAKS_DIGEST="sha256:[0-9a-f]{64}"' "$SRC/gitleaks-script" | head -n 1 | cut -d '"' -f 2)
+          old_digest=$({ grep -oE '^GITLEAKS_DIGEST="sha256:[0-9a-f]{64}"' "$SRC/gitleaks-script" || true; } | head -n 1 | cut -d '"' -f 2)
           if [[ -n $old_digest ]]; then
             token=$(curl -fsSL --retry 3 "https://ghcr.io/token?scope=repository:gitleaks/gitleaks:pull" | jq -r .token)
             digest=$(curl -fsSI --retry 3 -H "Authorization: Bearer $token" \
@@ -587,6 +589,20 @@ jobs:
           locked pnpm-lock.yaml > "$work/after.json"
           jq -c --slurpfile before "$work/before.json" '(. - $before[0])[]' "$work/after.json" > "$work/new.jsonl"
           added=$(wc -l < "$work/new.jsonl")
+
+          # A package in `minimumReleaseAgeExclude` or `trustPolicyExclude`
+          # skips the guard checked above, so a new version of one is left to a
+          # person. Entries are a name, `name@version` or a `*` pattern.
+          yq -o=json '[(.minimumReleaseAgeExclude // []), (.trustPolicyExclude // [])] | flatten' pnpm-workspace.yaml > "$work/excluded.json"
+          excluded=$(jq -r --slurpfile ex "$work/excluded.json" '
+            ($ex[0] | map(tostring | sub("@[^@]*$"; "") as $n | if $n == "" then . else $n end
+              | "^" + (gsub("(?<c>[.+?^$()\\[\\]{}|\\\\])"; "\\\(.c)") | gsub("\\*"; ".*")) + "$")) as $patterns
+            | select(.name as $name | any($patterns[]; . as $p | $name | test($p)))
+            | "\(.name)@\(.version)"' "$work/new.jsonl" | sort -u | sed -n '1,5p' | paste -sd ',' | sed 's/,/, /g')
+          if [[ -n $excluded ]]; then
+            printf 'current\nthe update adds versions that pnpm-workspace.yaml excludes from its cooldown or trust check (%s); update those by hand\n' "$excluded" > "$OUT/state"
+            exit 0
+          fi
           jq -c '{name, version}' "$work/new.jsonl" > "$OUT/osv-queries.jsonl"
 
           for path in pnpm-workspace.yaml pnpm-lock.yaml; do
@@ -636,7 +652,9 @@ jobs:
             echo
             echo "| Package | Version |"
             echo "| --- | --- |"
-            jq -r '"| `\(.name)` | \(.version) |"' "$work/new.jsonl" | head -n 100
+            # Limited in jq: `head` would close the pipe early, and pipefail
+            # would fail the step on jq's broken pipe.
+            jq -rs 'limit(100; .[]) | "| `\(.name)` | \(.version) |"' "$work/new.jsonl"
             if (( added > 100 )); then
               echo "| … $(( added - 100 )) more, see [the latest run's summary]($RUNS_URL) |"
             fi
@@ -696,7 +714,7 @@ jobs:
           done
           sort -u "$work/hits.jsonl" -o "$work/hits.jsonl"
           if [[ -s $work/hits.jsonl ]]; then
-            names=$(jq -r '"\(.name)@\(.version) (\(.id))"' "$work/hits.jsonl" | head -n 5 | paste -sd ',' | sed 's/,/, /g')
+            names=$(jq -r '"\(.name)@\(.version) (\(.id))"' "$work/hits.jsonl" | sed -n '1,5p' | paste -sd ',' | sed 's/,/, /g')
             echo "::error::osv.dev lists malicious versions in this update: $names."
             printf 'blocked\nosv.dev lists malicious versions in this update: %s\n' "$names" > "$OUT/state"
           fi
@@ -736,11 +754,16 @@ jobs:
             cat "$err" >&2
             exit 1
           fi
-          # Every commit the branch adds to the base is this workflow's. A
-          # human's commit or merge means someone is working on it, so the
-          # branch and its PR are left alone.
+          # Every commit the branch adds to the base is this workflow's: the
+          # bot author alone is not enough, since any workflow using
+          # `GITHUB_TOKEN` commits as it, so the commit must also carry this
+          # kind's trailer. Anyone else's commit or merge means someone is
+          # working on it, so the branch and its PR are left alone.
           ours() {
-            [[ $(gh api "repos/$REPO/compare/$BASE_SHA...$1" --jq '[.commits[].author.login] | all(. == "github-actions[bot]")') == true ]]
+            gh api "repos/$REPO/compare/$BASE_SHA...$1" > "$RUNNER_TEMP/compare.json"
+            jq -e --arg trailer "Maintenance-Updates: $KIND" '
+              all(.commits[]; .author.login == "github-actions[bot]" and (.commit.message | split("\n") | index($trailer) != null))
+            ' "$RUNNER_TEMP/compare.json" > /dev/null
           }
 
           if [[ $state != update ]]; then
@@ -868,8 +891,8 @@ jobs:
             echo "$branch already holds this update."
           else
             # The PR title is a plain sentence; the commit follows the
-            # `<type>: <subject>` convention.
-            commit=$(jq -n --arg m "chore: ${title,}" --arg t "$tree" --arg p "$BASE_SHA" '{message: $m, tree: $t, parents: [$p]}' |
+            # `<type>: <subject>` convention, with the trailer `ours` checks.
+            commit=$(jq -n --arg m "chore: ${title,}"$'\n\n'"Maintenance-Updates: $KIND" --arg t "$tree" --arg p "$BASE_SHA" '{message: $m, tree: $t, parents: [$p]}' |
               gh api "repos/$REPO/git/commits" --input - --jq .sha)
             if [[ -z $tip ]]; then
               gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$commit" --silent
@@ -888,10 +911,16 @@ jobs:
 
           created=false
           if [[ -z $number ]]; then
-            gh label create maintenance-updates --repo "$REPO" --force \
-              --color 1d76db --description "Opened by the maintenance-updates workflow (valuecodes/automation)"
+            # The label is a convenience; a token that may not manage labels
+            # still gets its PR.
+            labels=(--label maintenance-updates)
+            if ! gh label create maintenance-updates --repo "$REPO" --force \
+              --color 1d76db --description "Opened by the maintenance-updates workflow (valuecodes/automation)"; then
+              echo "::warning::Could not create the maintenance-updates label; opening the PR without it."
+              labels=()
+            fi
             if ! url=$(gh pr create --repo "$REPO" --base "$BASE" --head "$branch" --title "$title" \
-              --label maintenance-updates --body-file "$RUNNER_TEMP/body.md" 2> "$err"); then
+              "${labels[@]}" --body-file "$RUNNER_TEMP/body.md" 2> "$err"); then
               cat "$err" >&2
               if grep -qi 'not permitted to create or approve pull requests' "$err"; then
                 echo "::error::GitHub Actions may not open PRs in $REPO. Turn on \"Allow GitHub Actions to create and approve pull requests\" under Settings → Actions → General (and in the organization's settings), then re-run."
