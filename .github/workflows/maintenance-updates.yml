@@ -667,7 +667,7 @@ jobs:
               enc=${name//\//%2F}
               {
                 echo "$name@$spec on registry.npmjs.org (not the caller's registry, if it uses another)"
-                if curl -fsS --compressed -D "$work/registry.headers" -o "$work/registry.json" "https://registry.npmjs.org/$enc"; then
+                if curl -fsS --compressed --connect-timeout 10 --max-time 60 -D "$work/registry.headers" -o "$work/registry.json" "https://registry.npmjs.org/$enc"; then
                   grep -iE '^(date|cf-cache-status|age|last-modified|etag|cf-ray):' "$work/registry.headers" || true
                   jq -r --arg v "$spec" '
                     "dist-tags: \(."dist-tags" | to_entries | map("\(.key)=\(.value)") | join(" "))",
@@ -683,10 +683,12 @@ jobs:
               echo "pnpm named no package, or its name or spec did not validate" | section "Registry view of the failing package" || true
             fi
             git checkout -- pnpm-workspace.yaml package.json pnpm-lock.yaml || true
-            if pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.pm-on-fail=warn > "$work/pnpm-control.log" 2>&1; then
-              { echo "resolves: the runner is fine; the update itself does not resolve"; tail -n 5 "$work/pnpm-control.log"; } | section "Control: the unchanged lockfile" || true
+            # A pass here does not clear the registry: a satisfied lockfile may
+            # skip the very request the update needed.
+            if timeout 300 pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.pm-on-fail=warn > "$work/pnpm-control.log" 2>&1; then
+              { echo "resolves on this runner; the update's own requests may still have failed"; tail -n 5 "$work/pnpm-control.log"; } | section "Control: the unchanged lockfile" || true
             else
-              { echo "fails: this runner or its registry view is broken, not the update"; tail -n 40 "$work/pnpm-control.log"; } | section "Control: the unchanged lockfile" || true
+              { echo "fails on this runner too: the runner or its registry view is broken, not only the update"; tail -n 40 "$work/pnpm-control.log"; } | section "Control: the unchanged lockfile" || true
             fi
             section "pnpm output" < "$work/pnpm.log" || true
           }
