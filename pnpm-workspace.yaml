@@ -9,6 +9,10 @@ catalog:
 # guardrail, not a CI check.
 catalogMode: strict
 
+# Makes the `engines.node` range in `package.json` fail the install instead
+# of warning, so a wrong Node.js is caught before anything runs.
+engineStrict: true
+
 # 14 days, in minutes: a new release is not resolvable until it is this old.
 # So `pnpm up --latest` deliberately skips fresh releases; use
 # `minimumReleaseAgeExclude` if one package must move faster.
