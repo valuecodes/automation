@@ -625,13 +625,17 @@ jobs:
           # it discards the edit, so it runs last. Nothing here may fail the
           # step on its own, and every excerpt is capped, indented (content
           # cannot close an indented block) and redacted before it is Markdown.
+          # The redaction is defence in depth: this step holds no secrets and
+          # pnpm prints its auth settings as `(protected)`, but URL credentials,
+          # `key=value` and JSON `"key": value` lines naming auth, password or
+          # token settings, and npm or GitHub token shapes are masked anyway.
           diagnose() {
             section() {
               {
                 echo
                 echo "**$1**"
                 echo
-                head -c 20000 | sed -E 's#(://[^/@[:space:]]*)@#://***@#g; s/^([^=]*(_auth|_password|[Tt]oken)[^=]*=).*/\1***/' | sed 's/^/    /'
+                head -c 20000 | sed -E 's#(://[^/@[:space:]]*)@#://***@#g; s/^([^=]*(_auth|_password|[Tt]oken)[^=]*=).*/\1***/; s/^([[:space:]]*"[^"]*(_auth|_password|[Tt]oken)[^"]*":[[:space:]]*).*/\1"***"/; s/\b(npm_[A-Za-z0-9]{36}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})\b/***/g' | sed 's/^/    /'
                 echo
               } >> "$GITHUB_STEP_SUMMARY"
             }
