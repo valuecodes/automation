@@ -1,9 +1,9 @@
 name: CI
 
 # Checks formatting with oxfmt, shellchecks `scripts/`, lints the workflow
-# files through this repo's own `workflow-lint.yml` and runs the dashboard
-# against this repo in dry-run mode. The `ci` job is the check to require on
-# `main`.
+# files through this repo's own `workflow-lint.yml` and runs the dashboard and
+# the update PRs against this repo in dry-run mode. The `ci` job is the check
+# to require on `main`.
 
 on:
   pull_request:
@@ -65,6 +65,19 @@ jobs:
     with:
       dry-run: true
 
+  # The same for the update PRs: dry run plans each PR against this repo's
+  # default branch into the run summary and pushes nothing. The write grants
+  # are checked against the called jobs' permissions, as above.
+  maintenance-updates:
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      issues: read
+    uses: ./.github/workflows/maintenance-updates.yml # zizmor: ignore[self-repository]
+    with:
+      dry-run: true
+
   # The one check to require on `main`. `if: always()` makes it run even when a
   # needed job failed, so it reports a failure instead of skipping.
   ci:
@@ -72,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 1
     if: always()
-    needs: [format, workflow-lint, maintenance-dashboard]
+    needs: [format, workflow-lint, maintenance-dashboard, maintenance-updates]
     permissions: {}
     steps:
       - name: Check results

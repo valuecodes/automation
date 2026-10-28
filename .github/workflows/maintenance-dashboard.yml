@@ -5,7 +5,8 @@ name: Maintenance dashboard
 # `catalog:` in `pnpm-workspace.yaml`, pnpm, gitleaks, Node.js, `pnpm audit`
 # findings, osv.dev malicious-package hits and update signals. The title and
 # body are recomputed every run and edited only when they changed. No PRs, no
-# commits; updates stay manual. Uses only `GITHUB_TOKEN`: files are read
+# commits; `maintenance-updates.yml` opens PRs for the updates on the current
+# major. Uses only `GITHUB_TOKEN`: files are read
 # through the REST API, and `pnpm audit` runs from the lockfile without
 # installing. Other repos call it with
 # `uses: valuecodes/automation/.github/workflows/maintenance-dashboard.yml@<sha>`.
@@ -192,6 +193,7 @@ jobs:
 
           # From a packument: the newest stable, non-deprecated, old-enough
           # version on the current major and on a higher one (capped by $maxmajor).
+          # maintenance-updates.yml has a copy; keep the two in step.
           cat > "$SRC/newer.jq" <<'EOF'
           def ver: split(".") | map(tonumber);
           ($cur | ver) as $c
@@ -479,6 +481,7 @@ jobs:
           # `next_page_token` is incomplete (also after a 20 s server timeout),
           # so those queries are re-sent with the token until every result is
           # final. Every batch must answer one result per query, in order.
+          # maintenance-updates.yml has a copy; keep the two in step.
           : > "$work/hits.jsonl"
           cp "$work/queries.jsonl" "$work/pending.jsonl"
           rounds=0
@@ -554,6 +557,7 @@ jobs:
           # version in use. Missing provenance alone is not a signal: most of
           # npm has none. Losing it, a different publisher, a publisher who is
           # not a maintainer, or a release after a long silence is.
+          # maintenance-updates.yml has a copy; keep the two in step.
           cat > "$SRC/signals.jq" <<'EOF'
           def esc: tostring | gsub("\\|"; "\\|");
           def stamp: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
@@ -696,6 +700,8 @@ jobs:
             echo "::error::$GITLEAKS_SCRIPT has no GITLEAKS_VERSION=\"x.y.z\" line."
             exit 1
           fi
+          # maintenance-updates.yml has a copy, limited to the current major;
+          # keep the two in step.
           newest=$(gh api "repos/gitleaks/gitleaks/releases?per_page=100" | jq -r --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" '
             def ver: split(".") | map(tonumber);
             ($cur | ver) as $c
@@ -735,6 +741,7 @@ jobs:
           # Security releases count right away; the rest wait like other releases.
           # The flag covers every release up to the target, so a security release
           # followed by a newer regular one is still flagged.
+          # maintenance-updates.yml has a copy; keep the two in step.
           target=$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json | jq -r --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" '
             def ver: ltrimstr("v") | split(".") | map(tonumber);
             ($cur | ver) as $c

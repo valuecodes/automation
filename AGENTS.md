@@ -14,11 +14,13 @@ Reusable GitHub Actions workflows that other repos call with
 | Path                                          | What                                                  |
 | --------------------------------------------- | ----------------------------------------------------- |
 | `.github/workflows/maintenance-dashboard.yml` | Reusable: keeps the **Maintenance dashboard** issue   |
+| `.github/workflows/maintenance-updates.yml`   | Reusable: one update PR per kind (Node.js, pnpm, …)   |
 | `.github/workflows/workflow-lint.yml`         | Reusable: actionlint and zizmor over workflow files   |
-| `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, shellcheck, both reusables     |
+| `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, shellcheck, the reusables      |
 | `.github/actions/setup/`                      | Composite setup action: pnpm, Node.js, frozen install |
 | `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions       |
 | `scripts/dashboard-dry-run.sh`                | Runs the dashboard's steps locally, prints the body   |
+| `scripts/updates-dry-run.sh`                  | Runs the update steps locally, prints the planned PRs |
 
 `README.md` is the user-facing doc for each reusable workflow: what it does, a flowchart of
 how a run decides, and the caller snippet. Keep it in step with the workflow.
@@ -35,7 +37,13 @@ pnpm install                     # Install oxfmt
 pnpm format                      # oxfmt, writes in place
 pnpm format:check                # oxfmt --check (no writes)
 scripts/dashboard-dry-run.sh     # The dashboard body for this repo, or `owner/repo sha dir`
+scripts/updates-dry-run.sh       # The planned update PRs for this repo, or `owner/repo [kind...]`
 ```
+
+`scripts/updates-dry-run.sh` does the same for `maintenance-updates.yml`: it runs each kind's
+steps against the head of the repo's default branch on GitHub, with dry-run on (nothing pushed,
+no PR touched), and prints the PR each kind would open or why it opens none. For the catalog
+kind it fetches that commit into `tmp/updates/` and resolves the lockfile with the local pnpm.
 
 The dashboard workflow only writes issues inside caller repos; CI runs it against this repo
 in dry-run mode. Run `scripts/dashboard-dry-run.sh` after changing it to see the result

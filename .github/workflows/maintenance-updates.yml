@@ -1,0 +1,924 @@
+name: Maintenance updates
+
+# Keeps one PR per update kind open in the calling repo, on the branch
+# `maintenance-updates/<kind>`: Node.js (`.nvmrc`), pnpm (`packageManager`),
+# gitleaks (`GITLEAKS_VERSION` and `GITLEAKS_DIGEST`) and the `catalog:` in
+# `pnpm-workspace.yaml` with its lockfile. Only updates on the current major are
+# proposed; majors stay on the maintenance dashboard. Every run recomputes each
+# update from the default branch and updates its PR in place, or closes it when
+# nothing is due any more. Uses only `GITHUB_TOKEN`: commits are made through
+# the REST API, and the one checkout (catalog) resolves the lockfile without
+# installing or running repo code. Other repos call it with
+# `uses: valuecodes/automation/.github/workflows/maintenance-updates.yml@<sha>`.
+
+on:
+  workflow_call:
+    inputs:
+      min-release-age-days:
+        description: Minimum age of a proposed release (npm, pnpm, gitleaks, Node.js).
+        type: number
+        default: 14
+      gitleaks-script:
+        description: File holding `GITLEAKS_VERSION="x.y.z"`. Empty skips gitleaks.
+        type: string
+        default: .github/scripts/secrets-scan.sh
+      ci-workflow:
+        description: Workflow file to start on each pushed update branch (needs `workflow_dispatch`). Empty starts none.
+        type: string
+        default: ""
+      dry-run:
+        description: Write the planned PRs to the run summary only; push nothing and open or close no PR.
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  update:
+    # Each kind is its own job, so a failed check names its cause and one broken
+    # kind never holds back another's PR.
+    name: ${{ matrix.kind }}
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [node, pnpm, gitleaks, catalog]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      issues: read
+    # One run at a time per repo and kind, since each owns one branch and PR. A
+    # dry run writes nothing shared, so it gets its own group (see the dashboard).
+    concurrency:
+      group: ${{ inputs.dry-run && format('maintenance-updates-dry-run-{0}-{1}', github.run_id, matrix.kind) || format('maintenance-updates-{0}-{1}', github.repository, matrix.kind) }}
+      cancel-in-progress: false
+    # `GH_TOKEN` is set only on the steps that call the API, so the step that
+    # runs pnpm in the caller's checkout never sees a write token.
+    env:
+      REPO: ${{ github.repository }}
+      SERVER_URL: ${{ github.server_url }}
+      WORKFLOW_REF: ${{ github.workflow_ref }}
+      KIND: ${{ matrix.kind }}
+      MIN_AGE_DAYS: ${{ inputs.min-release-age-days }}
+      GITLEAKS_SCRIPT: ${{ inputs.gitleaks-script }}
+      CI_WORKFLOW: ${{ inputs.ci-workflow }}
+      DRY_RUN: ${{ inputs.dry-run }}
+    steps:
+      # Each kind step writes `$OUT/state` (`update`, `current`, `na` or
+      # `blocked`, then a reason line). For `update` it also writes `title` (the
+      # PR title, a plain sentence),
+      # `content.md`, the changed `paths` and each one's `old/` and `new/`
+      # content, and optionally `osv-queries.jsonl` and `summary.md` (run summary
+      # only). The last step turns that
+      # into a commit and a PR.
+      - name: Read the repo files on the default branch
+        id: setup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SRC="$RUNNER_TEMP/src"
+          OUT="$RUNNER_TEMP/update"
+          mkdir -p "$SRC" "$OUT/old" "$OUT/new"
+          if [[ ! $MIN_AGE_DAYS =~ ^[0-9]+$ ]]; then
+            echo "::error::min-release-age-days must be a whole number, got '$MIN_AGE_DAYS'."
+            exit 1
+          fi
+          if [[ -n $CI_WORKFLOW && ! $CI_WORKFLOW =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+            echo "::error::ci-workflow must be a workflow file name such as ci.yml, got '$CI_WORKFLOW'."
+            exit 1
+          fi
+          # Everything is read at one commit of the default branch, and the
+          # update commit is built on that same commit, whatever ref the caller
+          # ran on.
+          base=$(gh api "repos/$REPO" --jq .default_branch)
+          base_sha=$(gh api "repos/$REPO/git/ref/heads/$base" --jq .object.sha)
+          if [[ ! $base_sha =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve the head of $base."
+            exit 1
+          fi
+          caller=${WORKFLOW_REF%@*}
+          caller=${caller#"$REPO/"}
+          # The pinned dashboard issue, linked from each PR body when there is one.
+          dashboard=$(gh issue list --repo "$REPO" --label maintenance-dashboard --state open \
+            --json number --jq 'sort_by(.number) | .[0].number // empty')
+          printf 'SRC=%s\nOUT=%s\nBASE=%s\nBASE_SHA=%s\nCALLER=%s\nRUNS_URL=%s\nDASHBOARD=%s\n' \
+            "$SRC" "$OUT" "$base" "$base_sha" "$caller" "$SERVER_URL/$REPO/actions/workflows/${caller##*/}" "$dashboard" >> "$GITHUB_ENV"
+          echo "base-sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo $(( $(date +%s) - MIN_AGE_DAYS * 86400 )) > "$SRC/cutoff"
+
+          # As in the dashboard: a missing file makes its kind "not applicable".
+          fetch() {
+            local path=$1 dest=$2 err="$RUNNER_TEMP/fetch.err"
+            if gh api "repos/$REPO/contents/$path?ref=$base_sha" --jq .content 2> "$err" | tr -d '\n' | base64 -d > "$dest.tmp"; then
+              mv "$dest.tmp" "$dest"
+            elif grep -q 'HTTP 404' "$err"; then
+              rm -f "$dest.tmp"
+              echo "$path is not in the repo."
+            else
+              cat "$err" >&2
+              return 1
+            fi
+          }
+          case $KIND in
+            node) fetch .nvmrc "$SRC/.nvmrc" ;;
+            pnpm) fetch package.json "$SRC/package.json" ;;
+            gitleaks)
+              if [[ -n $GITLEAKS_SCRIPT ]]; then
+                fetch "$GITLEAKS_SCRIPT" "$SRC/gitleaks-script"
+              fi
+              ;;
+            catalog)
+              fetch pnpm-workspace.yaml "$SRC/pnpm-workspace.yaml"
+              fetch package.json "$SRC/package.json"
+              ;;
+          esac
+
+          # A copy of the dashboard's `newer.jq`; keep the two in step, so a PR
+          # proposes the version the dashboard lists.
+          cat > "$SRC/newer.jq" <<'EOF'
+          def ver: split(".") | map(tonumber);
+          ($cur | ver) as $c
+          | .time as $time
+          | [ .versions | to_entries[]
+              | select(.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))
+              | select(.value.deprecated | not)
+              | .key
+              | select(ver > $c)
+              | select(ver[0] <= ($maxmajor // ver[0]))
+              | select($time[.] != null and ($time[.] | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) <= $cutoff)
+            ] as $cands
+          | ($cands | map(select(ver[0] == $c[0])) | max_by(ver)) as $inMajor
+          | ($cands | map(select(ver[0] > $c[0])) | max_by(ver)) as $major
+          | { name: $name, current: $cur,
+              inMajor: $inMajor, inMajorDate: (if $inMajor then $time[$inMajor][0:10] else null end),
+              major: $major, majorDate: (if $major then $time[$major][0:10] else null end) }
+          EOF
+          # A copy of the dashboard's `signals.jq`; keep the two in step. An
+          # update with a signal is held back instead of proposed.
+          cat > "$SRC/signals.jq" <<'EOF'
+          def esc: tostring | gsub("\\|"; "\\|");
+          def stamp: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+          def who(v): .versions[v]._npmUser as $u
+            | if $u == null then null
+              elif $u.trustedPublisher then "trusted publishing (\($u.trustedPublisher.id // "?"))"
+              else $u.name end;
+          .time as $time
+          | .versions[$target] as $t
+          | .versions[$cur] as $c
+          | ($time[$target] | stamp) as $tt
+          | ([$time | to_entries[] | select(.key | test("^[0-9]+\\.")) | .value | strings | stamp | select(. < $tt)] | max) as $prev
+          | who($target) as $pub
+          | who($cur) as $curpub
+          | [ (if $c.dist.attestations != null and $t.dist.attestations == null then "provenance dropped" else empty end),
+              (if $pub != null and $curpub != null and $pub != $curpub then "new publisher \($pub | esc)" else empty end),
+              (if $pub != null and $t._npmUser.trustedPublisher == null and ([.maintainers[]?.name] | index($pub)) == null
+               then "publisher \($pub | esc) is not a maintainer" else empty end),
+              (if $prev != null and ($tt - $prev) > 365 * 86400
+               then "first release in \((($tt - $prev) / 2629800) | floor) months" else empty end)
+            ] as $signals
+          | select($signals | length > 0)
+          | "| `\($name | esc)` | \($cur) → \($target) | \($signals | join(", ")) |"
+          EOF
+
+      - name: "Node.js: find the update"
+        if: matrix.kind == 'node'
+        run: |
+          set -euo pipefail
+          if [[ ! -f $SRC/.nvmrc ]]; then
+            printf 'na\nno .nvmrc\n' > "$OUT/state"
+            exit 0
+          fi
+          cur=$(tr -d '[:space:]' < "$SRC/.nvmrc")
+          cur=${cur#v}
+          if [[ ! $cur =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::.nvmrc must hold an exact version such as 24.22.1, found '$cur'."
+            exit 1
+          fi
+          # A copy of the dashboard's Node.js rule; keep the two in step.
+          # Security releases count right away; the rest wait like other releases.
+          target=$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json | jq -r --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" '
+            def ver: ltrimstr("v") | split(".") | map(tonumber);
+            ($cur | ver) as $c
+            | map(select((.version | ver) as $v | $v[0] == $c[0] and $v > $c)) as $newer
+            | ($newer | map(select(.security or ((.date + "T00:00:00Z" | fromdateiso8601) <= $cutoff))) | max_by(.version | ver)) as $t
+            | if $t then
+                ($t.version | ver) as $tv
+                | "\($t.version | ltrimstr("v")) \($t.date) \(any($newer[]; (.version | ver) <= $tv and .security))"
+              else "" end')
+          if [[ -z $target ]]; then
+            printf 'current\nNode.js %s is up to date\n' "$cur" > "$OUT/state"
+            exit 0
+          fi
+          read -r version date security <<<"$target"
+          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected version '$version' in the Node.js release index."
+            exit 1
+          fi
+          major=${cur%%.*}
+          lifecycle=$(curl -fsSL --retry 3 https://raw.githubusercontent.com/nodejs/Release/main/schedule.json |
+            jq -r --argjson major "$major" --arg today "$(date -u +%F)" '
+              .["v\($major)"] as $s
+              | if $s == null then "Node.js \($major) is not in the release schedule"
+                elif $today >= $s.end then "past end of life since \($s.end)"
+                elif $s.maintenance and $today >= $s.maintenance then "in maintenance, end of life \($s.end)"
+                elif $s.lts and $today >= $s.lts then "Active LTS, end of life \($s.end)"
+                else "Current, end of life \($s.end)" end')
+
+          mkdir -p "$OUT/old" "$OUT/new"
+          cp "$SRC/.nvmrc" "$OUT/old/.nvmrc"
+          jq -Rjs --arg a "$cur" --arg b "$version" \
+            'if (split($a) | length) != 2 then error(".nvmrc holds \($a) more than once") else split($a) | join($b) end' \
+            "$SRC/.nvmrc" > "$OUT/new/.nvmrc"
+          echo .nvmrc > "$OUT/paths"
+          echo "Update Node.js to $version" > "$OUT/title"
+          status="⬆️ update"
+          details="$cur → $version ($date)"
+          if [[ $security == true ]]; then
+            status="⚠️ attention"
+            details="$details, security release"
+          fi
+          {
+            if [[ $security == true ]]; then
+              echo "> [!WARNING]"
+              echo "> This update includes a Node.js security release."
+              echo
+            fi
+            echo "| Check | Status | Details |"
+            echo "| --- | --- | --- |"
+            echo "| Node.js | $status | $details · $lifecycle |"
+            echo
+            echo "Release notes: [v$version](https://github.com/nodejs/node/releases/tag/v$version) · [every v$major release](https://github.com/nodejs/node/blob/main/doc/changelogs/CHANGELOG_V$major.md)."
+            echo "Also update any Node.js pin outside the repo, such as a hosting build variable."
+          } > "$OUT/content.md"
+          printf 'update\n\n' > "$OUT/state"
+
+      - name: "pnpm: find the update"
+        if: matrix.kind == 'pnpm'
+        run: |
+          set -euo pipefail
+          if [[ ! -f $SRC/package.json ]]; then
+            printf 'na\nno package.json\n' > "$OUT/state"
+            exit 0
+          fi
+          pm=$(jq -r '.packageManager // ""' "$SRC/package.json")
+          if [[ ! $pm =~ ^pnpm@([0-9]+\.[0-9]+\.[0-9]+)(\+.+)?$ ]]; then
+            printf 'na\npackageManager does not pin pnpm\n' > "$OUT/state"
+            exit 0
+          fi
+          cur=${BASH_REMATCH[1]}
+          hashed=${BASH_REMATCH[2]}
+          curl -fsSL --compressed --retry 3 -o "$RUNNER_TEMP/pnpm.json" https://registry.npmjs.org/pnpm
+          newer=$(jq -c --arg name pnpm --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" --argjson maxmajor null \
+            -f "$SRC/newer.jq" "$RUNNER_TEMP/pnpm.json")
+          version=$(jq -r '.inMajor // empty' <<<"$newer")
+          major=$(jq -r '.major // empty' <<<"$newer")
+          if [[ -z $version ]]; then
+            printf 'current\npnpm %s is up to date%s\n' "$cur" "${major:+ on its major (pnpm $major stays on the dashboard)}" > "$OUT/state"
+            exit 0
+          fi
+          if [[ -n $(jq -r --arg name pnpm --arg cur "$cur" --arg target "$version" -f "$SRC/signals.jq" "$RUNNER_TEMP/pnpm.json") ]]; then
+            printf 'current\npnpm %s is held back by update signals, see the dashboard\n' "$version" > "$OUT/state"
+            exit 0
+          fi
+          date=$(jq -r '.inMajorDate' <<<"$newer")
+
+          # Corepack checks the tarball against the hash in `packageManager`, so a
+          # pinned hash moves with the version. It is the registry's sha512
+          # integrity, in hex.
+          new_pm="pnpm@$version"
+          if [[ -n $hashed ]]; then
+            hex=$(jq -r --arg v "$version" '.versions[$v].dist.integrity // ""' "$RUNNER_TEMP/pnpm.json" |
+              sed -n 's/^sha512-//p' | base64 -d | od -An -v -tx1 | tr -d ' \n')
+            if [[ ! $hex =~ ^[0-9a-f]{128}$ ]]; then
+              echo "::error::The npm registry has no sha512 integrity for pnpm $version."
+              exit 1
+            fi
+            new_pm="$new_pm+sha512.$hex"
+          fi
+          cp "$SRC/package.json" "$OUT/old/package.json"
+          jq -Rjs --arg a "\"$pm\"" --arg b "\"$new_pm\"" \
+            'if (split($a) | length) != 2 then error("package.json holds \($a) more than once") else split($a) | join($b) end' \
+            "$SRC/package.json" > "$OUT/new/package.json"
+          echo package.json > "$OUT/paths"
+          jq -nc --arg v "$version" '{name: "pnpm", version: $v}' > "$OUT/osv-queries.jsonl"
+          echo "Update pnpm to $version" > "$OUT/title"
+          {
+            echo "| Check | Status | Details |"
+            echo "| --- | --- | --- |"
+            echo "| pnpm | ⬆️ update | $cur → $version ($date) |"
+            echo
+            echo "Release notes: [v$version](https://github.com/pnpm/pnpm/releases/tag/v$version)."
+            if [[ -n $hashed ]]; then
+              echo "The \`packageManager\` hash is the npm registry's sha512 integrity for pnpm $version."
+            fi
+          } > "$OUT/content.md"
+          printf 'update\n\n' > "$OUT/state"
+
+      - name: "gitleaks: find the update"
+        if: matrix.kind == 'gitleaks'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ -z $GITLEAKS_SCRIPT ]]; then
+            printf 'na\ngitleaks-script is empty\n' > "$OUT/state"
+            exit 0
+          fi
+          if [[ ! -f $SRC/gitleaks-script ]]; then
+            printf 'na\n%s is not in the repo\n' "$GITLEAKS_SCRIPT" > "$OUT/state"
+            exit 0
+          fi
+          cur=$(grep -oE '^GITLEAKS_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$SRC/gitleaks-script" | head -n 1 | cut -d '"' -f 2)
+          if [[ -z $cur ]]; then
+            echo "::error::$GITLEAKS_SCRIPT has no GITLEAKS_VERSION=\"x.y.z\" line."
+            exit 1
+          fi
+          # A copy of the dashboard's gitleaks query, limited to the current
+          # major; keep the two in step.
+          newest=$(gh api "repos/gitleaks/gitleaks/releases?per_page=100" | jq -r --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" '
+            def ver: split(".") | map(tonumber);
+            ($cur | ver) as $c
+            | map(select((.draft or .prerelease) | not))
+            | map(.tag_name |= ltrimstr("v"))
+            | map(select(.tag_name | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")))
+            | map(select((.tag_name | ver) > $c and (.tag_name | ver)[0] == $c[0] and (.published_at | fromdateiso8601) <= $cutoff))
+            | max_by(.tag_name | ver)
+            | if . then "\(.tag_name) \(.published_at[0:10])" else "" end')
+          if [[ -z $newest ]]; then
+            printf 'current\ngitleaks %s is up to date\n' "$cur" > "$OUT/state"
+            exit 0
+          fi
+          read -r version date <<<"$newest"
+
+          mkdir -p "$OUT/old/$(dirname "$GITLEAKS_SCRIPT")" "$OUT/new/$(dirname "$GITLEAKS_SCRIPT")"
+          cp "$SRC/gitleaks-script" "$OUT/old/$GITLEAKS_SCRIPT"
+          jq -Rjs --arg a "GITLEAKS_VERSION=\"$cur\"" --arg b "GITLEAKS_VERSION=\"$version\"" \
+            'if (split($a) | length) != 2 then error("the script holds \($a) more than once") else split($a) | join($b) end' \
+            "$SRC/gitleaks-script" > "$OUT/new/$GITLEAKS_SCRIPT"
+          # Scripts that run the container pin its digest next to the version, so
+          # a re-pushed tag cannot change what runs. The new digest is the one
+          # ghcr.io serves for the new tag, read anonymously.
+          digest_note=""
+          old_digest=$(grep -oE '^GITLEAKS_DIGEST="sha256:[0-9a-f]{64}"' "$SRC/gitleaks-script" | head -n 1 | cut -d '"' -f 2)
+          if [[ -n $old_digest ]]; then
+            token=$(curl -fsSL --retry 3 "https://ghcr.io/token?scope=repository:gitleaks/gitleaks:pull" | jq -r .token)
+            digest=$(curl -fsSI --retry 3 -H "Authorization: Bearer $token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+              "https://ghcr.io/v2/gitleaks/gitleaks/manifests/v$version" |
+              tr -d '\r' | sed -n 's/^docker-content-digest: //Ip')
+            if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::ghcr.io returned no digest for gitleaks v$version."
+              exit 1
+            fi
+            jq -Rjs --arg a "GITLEAKS_DIGEST=\"$old_digest\"" --arg b "GITLEAKS_DIGEST=\"$digest\"" \
+              'if (split($a) | length) != 2 then error("the script holds \($a) more than once") else split($a) | join($b) end' \
+              "$OUT/new/$GITLEAKS_SCRIPT" > "$OUT/new/$GITLEAKS_SCRIPT.tmp"
+            mv "$OUT/new/$GITLEAKS_SCRIPT.tmp" "$OUT/new/$GITLEAKS_SCRIPT"
+            digest_note="\`GITLEAKS_DIGEST\` is the digest ghcr.io serves for \`gitleaks:v$version\`."
+          fi
+          echo "$GITLEAKS_SCRIPT" > "$OUT/paths"
+          echo "Update gitleaks to $version" > "$OUT/title"
+          {
+            echo "| Check | Status | Details |"
+            echo "| --- | --- | --- |"
+            echo "| gitleaks | ⬆️ update | $cur → $version ($date) |"
+            echo
+            echo "Release notes: [v$version](https://github.com/gitleaks/gitleaks/releases/tag/v$version)."
+            if [[ -n $digest_note ]]; then
+              echo "$digest_note"
+            fi
+          } > "$OUT/content.md"
+          printf 'update\n\n' > "$OUT/state"
+
+      - name: "Dependencies: pick the updates"
+        id: catalog
+        if: matrix.kind == 'catalog'
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/npm"
+          mkdir -p "$work"
+          na() {
+            printf 'na\n%s\n' "$1" > "$OUT/state"
+            exit 0
+          }
+          if [[ ! -f $SRC/pnpm-workspace.yaml ]]; then
+            na "no pnpm-workspace.yaml"
+          fi
+          yq -o=json '.catalog // {}' "$SRC/pnpm-workspace.yaml" > "$work/catalog.json"
+          total=$(jq 'length' "$work/catalog.json")
+          if [[ $total == 0 ]]; then
+            na "no catalog: in pnpm-workspace.yaml"
+          fi
+          if [[ ! -f $SRC/package.json ]] || ! jq -e '.packageManager // "" | test("^pnpm@")' "$SRC/package.json" > /dev/null; then
+            na "package.json has no pnpm packageManager"
+          fi
+          # The lockfile is resolved by pnpm, which picks transitive versions on
+          # its own. Its cooldown and trust check are what keep a fresh or
+          # downgraded release out of them, so the caller must have both, with a
+          # cooldown at least as long as this workflow's.
+          age=$(yq '.minimumReleaseAge // 0' "$SRC/pnpm-workspace.yaml")
+          trust=$(yq '.trustPolicy // ""' "$SRC/pnpm-workspace.yaml")
+          need=$(( MIN_AGE_DAYS * 1440 ))
+          if [[ ! $age =~ ^[0-9]+$ ]] || (( age < need )) || [[ $trust != no-downgrade ]]; then
+            na "pnpm-workspace.yaml needs minimumReleaseAge of at least $need and trustPolicy: no-downgrade"
+          fi
+          # Direct updates wait as long as pnpm makes the transitive ones wait.
+          cutoff=$(( $(date +%s) - age * 60 ))
+
+          # Full packuments (they carry `time`), as in the dashboard.
+          jq -r 'keys[]' "$work/catalog.json" | while IFS= read -r name; do
+            enc=${name//\//%2F}
+            printf 'url = "https://registry.npmjs.org/%s"\noutput = "%s/%s.json"\n' "$enc" "$work" "$enc"
+          done > "$work/urls.txt"
+          curl -fsSL --compressed --retry 3 --parallel --parallel-max 6 --config "$work/urls.txt"
+
+          : > "$work/kept.jsonl"
+          : > "$work/flagged.md"
+          majors=0
+          jq -r 'to_entries[] | "\(.key)\t\(.value | tostring)"' "$work/catalog.json" | while IFS=$'\t' read -r name spec; do
+            if [[ ! $spec =~ ^([\^~]?)([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+              continue
+            fi
+            prefix=${BASH_REMATCH[1]}
+            cur=${BASH_REMATCH[2]}
+            packument="$work/${name//\//%2F}.json"
+            row=$(jq -c --arg name "$name" --arg cur "$cur" --argjson cutoff "$cutoff" --argjson maxmajor null \
+              -f "$SRC/newer.jq" "$packument")
+            target=$(jq -r '.inMajor // empty' <<<"$row")
+            if [[ -n $(jq -r '.major // empty' <<<"$row") ]]; then
+              echo major >> "$work/majors"
+            fi
+            if [[ -z $target ]]; then
+              continue
+            fi
+            flagged=$(jq -r --arg name "$name" --arg cur "$cur" --arg target "$target" -f "$SRC/signals.jq" "$packument")
+            if [[ -n $flagged ]]; then
+              echo "$flagged" >> "$work/flagged.md"
+            else
+              jq -c --arg prefix "$prefix" '{name, prefix: $prefix, current, target: .inMajor, date: .inMajorDate}' <<<"$row" >> "$work/kept.jsonl"
+            fi
+          done
+          if [[ -f $work/majors ]]; then
+            majors=$(wc -l < "$work/majors")
+          fi
+          kept=$(wc -l < "$work/kept.jsonl")
+          flagged=$(wc -l < "$work/flagged.md")
+          if (( kept == 0 )); then
+            if (( flagged > 0 )); then
+              reason="$flagged catalog updates are held back by update signals, see the dashboard"
+            else
+              reason="the $total catalog packages are up to date on their majors"
+            fi
+            if (( majors > 0 )); then
+              reason="$reason; new majors stay on the dashboard"
+            fi
+            printf 'current\n%s\n' "$reason" > "$OUT/state"
+            exit 0
+          fi
+          echo "resolve=true" >> "$GITHUB_OUTPUT"
+
+      # The only checkout. Credentials are not kept, and no step after it that
+      # runs in the checkout has a token.
+      - name: "Dependencies: check out the default branch"
+        if: matrix.kind == 'catalog' && steps.catalog.outputs.resolve == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.setup.outputs.base-sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: "Dependencies: set up pnpm"
+        if: matrix.kind == 'catalog' && steps.catalog.outputs.resolve == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: "Dependencies: set up Node.js"
+        if: matrix.kind == 'catalog' && steps.catalog.outputs.resolve == 'true' && hashFiles('.nvmrc') != ''
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: "Dependencies: resolve the lockfile"
+        if: matrix.kind == 'catalog' && steps.catalog.outputs.resolve == 'true'
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/npm"
+          if [[ $(git rev-parse HEAD) != "$BASE_SHA" ]] || ! cmp -s pnpm-workspace.yaml "$SRC/pnpm-workspace.yaml"; then
+            echo "::error::The checkout is not the commit the catalog was read from."
+            exit 1
+          fi
+          if [[ ! -f pnpm-lock.yaml ]]; then
+            printf 'na\nno pnpm-lock.yaml\n' > "$OUT/state"
+            exit 0
+          fi
+
+          # Edits only the version on each catalog line, so comments, quotes and
+          # blank lines stay as they are (`yq -i` drops blank lines). yq then
+          # checks that the parsed catalog is exactly the expected one.
+          jq -s 'map({key: .name, value: .}) | from_entries' "$work/kept.jsonl" > "$work/updates.json"
+          cat > "$work/edit.jq" <<'EOF'
+          def unq: if length >= 2 and ((startswith("\"") and endswith("\"")) or (startswith("'") and endswith("'"))) then .[1:-1] else . end;
+          def trim: sub("^\\s+"; "") | sub("\\s+$"; "");
+          reduce (split("\n")[]) as $l ({out: [], in: false, done: {}};
+            if ($l | test("^catalog:\\s*(#.*)?$")) then .in = true | .out += [$l]
+            elif .in and ($l | test("^\\S")) then .in = false | .out += [$l]
+            elif .in and ($l | test("^\\s+[^\\s#]")) and ($l | index(":")) != null then
+              ($l | index(":")) as $c
+              | ($l[:$c] | trim | unq) as $key
+              | if $updates[$key] == null then .out += [$l]
+                else $updates[$key] as $u
+                  | ($l[$c:]) as $v
+                  | ($v | index($u.current)) as $p
+                  | if $p == null then error("\($key): \($u.current) is not on its catalog line") else . end
+                  | .out += [$l[:$c] + $v[:$p] + $u.target + $v[$p + ($u.current | length):]]
+                  | .done[$key] = true
+                end
+            else .out += [$l] end)
+          | if (.done | length) != ($updates | length) then error("not every update was found under catalog:") else . end
+          | .out | join("\n")
+          EOF
+          jq -Rjs --slurpfile updates "$work/updates.json" '$updates[0] as $updates | '"$(< "$work/edit.jq")" \
+            pnpm-workspace.yaml > "$work/pnpm-workspace.yaml"
+          jq --slurpfile updates "$work/updates.json" \
+            'with_entries(.key as $k | if $updates[0][$k] then .value = $updates[0][$k].prefix + $updates[0][$k].target else . end)' \
+            "$work/catalog.json" > "$work/expected.json"
+          check_catalog() {
+            if ! yq -o=json '.catalog' "$1" | jq -e --slurpfile want "$work/expected.json" '. == $want[0]' > /dev/null; then
+              echo "::error::The catalog in $1 is not the expected one after the edit."
+              exit 1
+            fi
+          }
+          check_catalog "$work/pnpm-workspace.yaml"
+          cp "$work/pnpm-workspace.yaml" pnpm-workspace.yaml
+
+          # The registry packages of a lockfile, as the dashboard lists them.
+          locked() {
+            yq ea -o=json '[.] | {"version": .[0].lockfileVersion, "keys": [.[] | (.packages // {}) | keys | .[]]}' "$1" > "$work/lockfile.json"
+            if [[ ! $(jq -r '.version | tostring' "$work/lockfile.json") =~ ^[69]\.[0-9]+$ ]]; then
+              echo "::error::$1 is not lockfile version 6 or 9."
+              exit 1
+            fi
+            jq '
+              [ .keys[]
+                | ltrimstr("/") | sub("\\(.*$"; "")
+                | ([capture("^(?<name>.+)@(?<version>[^@]+)$")][0] // empty)
+                | select((.name | test("^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$"))
+                    and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$")))
+              ] | unique' "$work/lockfile.json"
+          }
+          git show HEAD:pnpm-lock.yaml > "$work/before.yaml"
+          locked "$work/before.yaml" > "$work/before.json"
+
+          # Resolves without installing: nothing is downloaded or unpacked, and
+          # neither lifecycle scripts nor `.pnpmfile.cjs` run. CI sets
+          # `--frozen-lockfile` by default, so it is turned off here.
+          if ! pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile; then
+            echo "::error::pnpm could not resolve the catalog updates (see above); the dashboard still lists them."
+            exit 1
+          fi
+          check_catalog pnpm-workspace.yaml
+          unexpected=$(git status --porcelain --untracked-files=all | grep -vE '^ M (pnpm-lock|pnpm-workspace)\.yaml$' || true)
+          if [[ -n $unexpected ]]; then
+            echo "::error::Resolving changed files other than pnpm-workspace.yaml and pnpm-lock.yaml: $unexpected"
+            exit 1
+          fi
+          locked pnpm-lock.yaml > "$work/after.json"
+          jq -c --slurpfile before "$work/before.json" '(. - $before[0])[]' "$work/after.json" > "$work/new.jsonl"
+          added=$(wc -l < "$work/new.jsonl")
+          jq -c '{name, version}' "$work/new.jsonl" > "$OUT/osv-queries.jsonl"
+
+          for path in pnpm-workspace.yaml pnpm-lock.yaml; do
+            git show "HEAD:$path" > "$OUT/old/$path"
+            cp "$path" "$OUT/new/$path"
+            echo "$path"
+          done > "$OUT/paths"
+          kept=$(wc -l < "$work/kept.jsonl")
+          flagged=$(wc -l < "$work/flagged.md")
+          if (( kept == 1 )); then
+            jq -r '"Update \(.name) to \(.target)"' "$work/kept.jsonl" > "$OUT/title"
+          else
+            echo "Update $kept catalog packages" > "$OUT/title"
+          fi
+          # The full list of new locked versions goes to the run summary, after
+          # the PR body; the PR shows the first 100, so a large resolution
+          # cannot break the body.
+          {
+            echo "### All new locked versions"
+            echo
+            jq -r '"- `\(.name)` \(.version)"' "$work/new.jsonl"
+          } > "$OUT/summary.md"
+          {
+            if (( flagged > 0 )); then
+              echo "> [!WARNING]"
+              if (( flagged == 1 )); then
+                echo "> 1 package was left out because of update signals, see below."
+              else
+                echo "> $flagged packages were left out because of update signals, see below."
+              fi
+              echo
+            fi
+            echo "| Package | Current | Update | Released |"
+            echo "| --- | --- | --- | --- |"
+            jq -r 'def esc: tostring | gsub("\\|"; "\\|");
+              "| `\(.name | esc)` | \(.prefix)\(.current) | \(.prefix)\(.target) | \(.date) |"' "$work/kept.jsonl"
+            echo
+            echo "### Lockfile changes"
+            echo
+            noun=versions
+            if (( added == 1 )); then
+              noun=version
+            fi
+            echo "$added new locked $noun, all checked on osv.dev: none is in the OpenSSF malicious-packages database."
+            echo
+            echo "<details><summary>New locked versions</summary>"
+            echo
+            echo "| Package | Version |"
+            echo "| --- | --- |"
+            jq -r '"| `\(.name)` | \(.version) |"' "$work/new.jsonl" | head -n 100
+            if (( added > 100 )); then
+              echo "| … $(( added - 100 )) more, see [the latest run's summary]($RUNS_URL) |"
+            fi
+            echo
+            echo "</details>"
+            if (( flagged > 0 )); then
+              echo
+              echo "### Left out"
+              echo
+              echo "| Package | Update | Signals |"
+              echo "| --- | --- | --- |"
+              cat "$work/flagged.md"
+            fi
+          } > "$OUT/content.md"
+          printf 'update\n\n' > "$OUT/state"
+
+      # The OpenSSF malicious-packages feed on osv.dev, for every npm version an
+      # update adds (the pnpm target, or each new locked version). A hit blocks
+      # the update and closes its open PR. The batching and paging are a copy of
+      # the dashboard's supply chain step; keep the two in step.
+      - name: Check the new versions on osv.dev
+        run: |
+          set -euo pipefail
+          queries="$OUT/osv-queries.jsonl"
+          if [[ ! -s $queries ]] || [[ $(head -n 1 "$OUT/state") != update ]]; then
+            exit 0
+          fi
+          work="$RUNNER_TEMP/osv"
+          mkdir -p "$work"
+          : > "$work/hits.jsonl"
+          sort -u "$queries" > "$work/pending.jsonl"
+          rounds=0
+          while [[ -s $work/pending.jsonl ]]; do
+            if (( rounds == 10 )); then
+              echo "::error::osv.dev kept paginating after 10 rounds; giving up."
+              exit 1
+            fi
+            rounds=$(( rounds + 1 ))
+            : > "$work/next.jsonl"
+            jq -sc '. as $all | range(0; length; 1000) | $all[.:. + 1000]' "$work/pending.jsonl" > "$work/chunks.jsonl"
+            while IFS= read -r chunk; do
+              jq '{queries: map({package: {name: .name, ecosystem: "npm"}, version: .version, page_token: .page_token} | with_entries(select(.value != null)))}' \
+                <<<"$chunk" > "$work/request.json"
+              curl -fsSL --retry 3 -X POST -H 'Content-Type: application/json' --data-binary "@$work/request.json" \
+                https://api.osv.dev/v1/querybatch > "$work/response.json"
+              if ! jq -e --slurpfile res "$work/response.json" 'length == ($res[0].results | length)' <<<"$chunk" > /dev/null; then
+                echo "::error::osv.dev answered a batch with the wrong number of results."
+                exit 1
+              fi
+              jq -c --slurpfile res "$work/response.json" '
+                [., $res[0].results] | transpose[] | .[0] + {vulns: (.[1].vulns // []), next: .[1].next_page_token}' \
+                <<<"$chunk" > "$work/merged.jsonl"
+              jq -c 'select(.next != null) | {name, version, page_token: .next}' "$work/merged.jsonl" >> "$work/next.jsonl"
+              jq -c '{name, version} + (.vulns[] | select(.id | test("^MAL-[0-9]+-[0-9]+$")) | {id})' "$work/merged.jsonl" >> "$work/hits.jsonl"
+            done < "$work/chunks.jsonl"
+            mv "$work/next.jsonl" "$work/pending.jsonl"
+          done
+          sort -u "$work/hits.jsonl" -o "$work/hits.jsonl"
+          if [[ -s $work/hits.jsonl ]]; then
+            names=$(jq -r '"\(.name)@\(.version) (\(.id))"' "$work/hits.jsonl" | head -n 5 | paste -sd ',' | sed 's/,/, /g')
+            echo "::error::osv.dev lists malicious versions in this update: $names."
+            printf 'blocked\nosv.dev lists malicious versions in this update: %s\n' "$names" > "$OUT/state"
+          fi
+
+      - name: Open or update the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f $OUT/state ]]; then
+            echo "::error::The $KIND step wrote no result."
+            exit 1
+          fi
+          { read -r state; read -r reason || true; } < "$OUT/state"
+          branch="maintenance-updates/$KIND"
+          err="$RUNNER_TEMP/gh.err"
+          case $KIND in
+            node) label=Node.js ;;
+            catalog) label=Dependencies ;;
+            *) label=$KIND ;;
+          esac
+
+          # This workflow's open PR from this repo; a fork's PR on a branch of
+          # the same name is not its to touch.
+          pr=$(gh pr list --repo "$REPO" --head "$branch" --state open --author app/github-actions \
+            --json number,title,body,isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository | not)] | sort_by(.number) | .[0] // empty')
+          number=""
+          if [[ -n $pr ]]; then
+            number=$(jq -r .number <<<"$pr")
+          fi
+          if tip=$(gh api "repos/$REPO/git/ref/heads/$branch" --jq .object.sha 2> "$err"); then
+            :
+          elif grep -q 'HTTP 404' "$err"; then
+            tip=""
+          else
+            cat "$err" >&2
+            exit 1
+          fi
+          # Every commit the branch adds to the base is this workflow's. A
+          # human's commit or merge means someone is working on it, so the
+          # branch and its PR are left alone.
+          ours() {
+            [[ $(gh api "repos/$REPO/compare/$BASE_SHA...$1" --jq '[.commits[].author.login] | all(. == "github-actions[bot]")') == true ]]
+          }
+
+          if [[ $state != update ]]; then
+            echo "**$label:** $reason." >> "$GITHUB_STEP_SUMMARY"
+            if [[ -n $tip ]]; then
+              if ! ours "$tip"; then
+                echo "::warning::$branch has commits not made by this workflow; leaving it and its PR alone."
+              elif [[ $DRY_RUN == true ]]; then
+                echo "Dry run: would close ${number:+#$number and }delete $branch."
+              elif [[ -n $number ]]; then
+                gh pr close "$number" --repo "$REPO" --delete-branch \
+                  --comment "Closed by the \`$CALLER\` workflow: $reason."
+                echo "Closed #$number: $reason."
+              else
+                gh api -X DELETE "repos/$REPO/git/refs/heads/$branch" --silent
+                echo "Deleted $branch, left over without a PR."
+              fi
+            fi
+            if [[ $state == blocked ]]; then
+              exit 1
+            fi
+            exit 0
+          fi
+
+          title=$(< "$OUT/title")
+          content=$(< "$OUT/content.md")
+          if [[ -n $CI_WORKFLOW ]]; then
+            content="$content"$'\n\n'"CI runs through \`workflow_dispatch\` of \`$CI_WORKFLOW\`, because a PR opened with \`GITHUB_TOKEN\` does not start \`pull_request\` workflows."
+          else
+            content="$content"$'\n\n'"This PR was opened with \`GITHUB_TOKEN\`, which does not start \`pull_request\` workflows: close and reopen it to run CI, or set \`ci-workflow\` in the caller."
+          fi
+          if [[ -n $DASHBOARD ]]; then
+            content="$content"$'\n\n'"Dashboard: #$DASHBOARD"
+          fi
+          # The same footer as the dashboard issue. The hash excludes the date,
+          # so an unchanged body is not re-saved.
+          source_link=" · Source: [valuecodes/automation](https://github.com/valuecodes/automation)"
+          note="Generated by the \`$CALLER\` workflow; manual edits are overwritten."
+          hash=$(printf '%s\n%s' "$title" "$content" | sha256sum | cut -d ' ' -f 1)
+          marker="<!-- maintenance-updates:$hash -->"
+          {
+            echo "$content"
+            echo
+            echo "---"
+            echo "Last changed: $(date -u +%Y-%m-%d) · [Workflow runs]($RUNS_URL)$source_link"
+            echo
+            echo "$note"
+            echo "$marker"
+          } > "$RUNNER_TEMP/body.md"
+          {
+            echo "## $title"
+            echo
+            echo "$content"
+            if [[ -f $OUT/summary.md ]]; then
+              echo
+              cat "$OUT/summary.md"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ $DRY_RUN == true ]]; then
+            {
+              echo
+              echo "<details><summary>Diff</summary>"
+              echo
+              echo '```diff'
+              while IFS= read -r path; do
+                diff -u --label "a/$path" --label "b/$path" "$OUT/old/$path" "$OUT/new/$path" | head -n 300 || true
+              done < "$OUT/paths"
+              echo '```'
+              echo
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Dry run: the planned PR is in the run summary; nothing was pushed."
+            exit 0
+          fi
+
+          if [[ -n $tip ]] && ! ours "$tip"; then
+            echo "::warning::$branch has commits not made by this workflow; leaving it and its PR alone."
+            exit 0
+          fi
+          # A PR with this exact update that someone closed without merging
+          # stays closed until the update changes.
+          if [[ -z $number ]]; then
+            closed=$(gh pr list --repo "$REPO" --head "$branch" --state closed --author app/github-actions \
+              --json body,isCrossRepository,mergedAt \
+              --jq '.[] | select((.isCrossRepository | not) and .mergedAt == null) | .body')
+            if grep -qF "$marker" <<<"$closed"; then
+              echo "A closed PR already proposed this exact update; not reopening it."
+              exit 0
+            fi
+          fi
+
+          # The commit is made through the API on the base commit: GitHub signs
+          # it, and no credentials touch a checkout. File modes are copied from
+          # the base, so an executable script stays executable.
+          base_tree=$(gh api "repos/$REPO/git/commits/$BASE_SHA" --jq .tree.sha)
+          mode_of() {
+            local tree=$base_tree rest=$1 dir
+            while [[ $rest == */* ]]; do
+              dir=${rest%%/*}
+              rest=${rest#*/}
+              tree=$(gh api "repos/$REPO/git/trees/$tree" | jq -r --arg n "$dir" '.tree[] | select(.path == $n and .type == "tree") | .sha')
+              if [[ -z $tree ]]; then
+                return 1
+              fi
+            done
+            gh api "repos/$REPO/git/trees/$tree" | jq -r --arg n "$rest" '.tree[] | select(.path == $n and .type == "blob") | .mode'
+          }
+          entries='[]'
+          while IFS= read -r path; do
+            mode=$(mode_of "$path" || true)
+            if [[ ! $mode =~ ^100(644|755)$ ]]; then
+              echo "::error::$path is not a regular file at $BASE_SHA."
+              exit 1
+            fi
+            blob=$(base64 -w 0 "$OUT/new/$path" | jq -Rs '{content: ., encoding: "base64"}' |
+              gh api "repos/$REPO/git/blobs" --input - --jq .sha)
+            entries=$(jq -c --arg p "$path" --arg m "$mode" --arg s "$blob" '. + [{path: $p, mode: $m, type: "blob", sha: $s}]' <<<"$entries")
+          done < "$OUT/paths"
+          tree=$(jq -n --arg base "$base_tree" --argjson t "$entries" '{base_tree: $base, tree: $t}' |
+            gh api "repos/$REPO/git/trees" --input - --jq .sha)
+
+          pushed=false
+          if [[ -n $tip && $(gh api "repos/$REPO/git/commits/$tip" --jq '"\(.tree.sha) \(.parents | map(.sha) | join(" "))"') == "$tree $BASE_SHA" ]]; then
+            echo "$branch already holds this update."
+          else
+            # The PR title is a plain sentence; the commit follows the
+            # `<type>: <subject>` convention.
+            commit=$(jq -n --arg m "chore: ${title,}" --arg t "$tree" --arg p "$BASE_SHA" '{message: $m, tree: $t, parents: [$p]}' |
+              gh api "repos/$REPO/git/commits" --input - --jq .sha)
+            if [[ -z $tip ]]; then
+              gh api "repos/$REPO/git/refs" -f ref="refs/heads/$branch" -f sha="$commit" --silent
+            else
+              # The REST API cannot update a ref only if it still points where
+              # it did, so re-read it right before; a push in between is kept.
+              if [[ $(gh api "repos/$REPO/git/ref/heads/$branch" --jq .object.sha) != "$tip" ]]; then
+                echo "::warning::$branch moved while this run worked on it; leaving it alone."
+                exit 0
+              fi
+              gh api -X PATCH "repos/$REPO/git/refs/heads/$branch" -f sha="$commit" -F force=true --silent
+            fi
+            pushed=true
+            echo "Pushed $commit to $branch."
+          fi
+
+          created=false
+          if [[ -z $number ]]; then
+            gh label create maintenance-updates --repo "$REPO" --force \
+              --color 1d76db --description "Opened by the maintenance-updates workflow (valuecodes/automation)"
+            if ! url=$(gh pr create --repo "$REPO" --base "$BASE" --head "$branch" --title "$title" \
+              --label maintenance-updates --body-file "$RUNNER_TEMP/body.md" 2> "$err"); then
+              cat "$err" >&2
+              if grep -qi 'not permitted to create or approve pull requests' "$err"; then
+                echo "::error::GitHub Actions may not open PRs in $REPO. Turn on \"Allow GitHub Actions to create and approve pull requests\" under Settings → Actions → General (and in the organization's settings), then re-run."
+              else
+                echo "::error::Could not open a PR for $branch."
+              fi
+              exit 1
+            fi
+            echo "Opened $url."
+            created=true
+          else
+            # Unchanged means the same title, content, footer and marker, as in
+            # the dashboard, so the PR's edit history shows real changes.
+            existing_title=$(jq -r .title <<<"$pr")
+            existing=$(jq -r .body <<<"$pr" | tr -d '\r')
+            if [[ $existing_title == "$title" && $existing == "$content"$'\n\n---\nLast changed: '*"$source_link"$'\n\n'"$note"$'\n'"$marker" ]]; then
+              echo "PR #$number is unchanged."
+            else
+              gh pr edit "$number" --repo "$REPO" --title "$title" --body-file "$RUNNER_TEMP/body.md" > /dev/null
+              echo "Updated PR #$number."
+            fi
+          fi
+
+          if [[ -n $CI_WORKFLOW ]] && [[ $pushed == true || $created == true ]]; then
+            if ! gh workflow run "$CI_WORKFLOW" --repo "$REPO" --ref "$branch"; then
+              echo "::error::Could not start $CI_WORKFLOW on $branch. It needs an \`on: workflow_dispatch:\` trigger, and the caller job needs \`actions: write\`."
+              exit 1
+            fi
+            echo "Started $CI_WORKFLOW on $branch."
+          fi
