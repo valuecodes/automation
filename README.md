@@ -99,7 +99,7 @@ dashboard lists on the current major. Each kind is its own job, so a failure nam
 | Kind (job) | Changes                                                                        |
 | ---------- | ------------------------------------------------------------------------------ |
 | `node`     | `.nvmrc`                                                                       |
-| `pnpm`     | `packageManager`, with its `+sha512` hash from the npm registry                |
+| `pnpm`     | `packageManager` and its `+sha512` hash, and the pnpm pin in `pnpm-lock.yaml`  |
 | `gitleaks` | `GITLEAKS_VERSION`, and `GITLEAKS_DIGEST` from ghcr.io when the script pins it |
 | `catalog`  | `catalog:` entries in `pnpm-workspace.yaml`, and `pnpm-lock.yaml` to match     |
 
