@@ -304,7 +304,17 @@ jobs:
             'if (split($a) | length) != 2 then error("package.json holds \($a) more than once") else split($a) | join($b) end' \
             "$SRC/package.json" > "$OUT/new/package.json"
           echo package.json > "$OUT/paths"
-          jq -nc --arg v "$version" '{name: "pnpm", version: $v}' > "$OUT/osv-queries.jsonl"
+          # The lockfile step runs this pnpm to resolve the lockfile, so it is
+          # checked on osv.dev before that, not only with the other new versions.
+          mal=$(jq -nc --arg v "$version" '{package: {name: "pnpm", ecosystem: "npm"}, version: $v}' |
+            curl -fsSL --retry 3 -X POST -H 'Content-Type: application/json' --data-binary @- https://api.osv.dev/v1/query |
+            jq -r 'if .next_page_token then error("osv.dev paginated a single query") else [.vulns[]?.id | select(test("^MAL-[0-9]+-[0-9]+$"))] | join(", ") end')
+          if [[ -n $mal ]]; then
+            echo "::error::osv.dev lists pnpm $version as malicious: $mal."
+            printf 'blocked\nosv.dev lists pnpm %s as malicious (%s)\n' "$version" "$mal" > "$OUT/state"
+            exit 0
+          fi
+          echo "RESOLVE=true" >> "$GITHUB_ENV"
           echo "Update pnpm to $version" > "$OUT/title"
           {
             echo "| Check | Status | Details |"
@@ -480,41 +490,64 @@ jobs:
             printf 'current\n%s\n' "$reason" > "$OUT/state"
             exit 0
           fi
-          echo "resolve=true" >> "$GITHUB_OUTPUT"
+          echo "RESOLVE=true" >> "$GITHUB_ENV"
 
-      # The only checkout. Credentials are not kept, and no step after it that
-      # runs in the checkout has a token.
-      - name: "Dependencies: check out the default branch"
-        if: matrix.kind == 'catalog' && steps.catalog.outputs.resolve == 'true'
+      # The only checkout, for the kinds that change `pnpm-lock.yaml`: catalog,
+      # and pnpm, since a pnpm 10+ lockfile pins pnpm itself and
+      # `--frozen-lockfile` fails when that pin is stale. Credentials are not
+      # kept, and no step after it that runs in the checkout has a token.
+      - name: "Lockfile: check out the default branch"
+        if: env.RESOLVE == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.setup.outputs.base-sha }}
           persist-credentials: false
           fetch-depth: 1
 
-      - name: "Dependencies: set up pnpm"
-        if: matrix.kind == 'catalog' && steps.catalog.outputs.resolve == 'true'
+      - name: "Lockfile: set up pnpm"
+        if: env.RESOLVE == 'true'
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
-      - name: "Dependencies: set up Node.js"
-        if: matrix.kind == 'catalog' && steps.catalog.outputs.resolve == 'true' && hashFiles('.nvmrc') != ''
+      - name: "Lockfile: set up Node.js"
+        if: env.RESOLVE == 'true' && hashFiles('.nvmrc') != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
-      - name: "Dependencies: resolve the lockfile"
-        if: matrix.kind == 'catalog' && steps.catalog.outputs.resolve == 'true'
+      - name: "Lockfile: resolve"
+        if: env.RESOLVE == 'true'
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/npm"
-          if [[ $(git rev-parse HEAD) != "$BASE_SHA" ]] || ! cmp -s pnpm-workspace.yaml "$SRC/pnpm-workspace.yaml"; then
-            echo "::error::The checkout is not the commit the catalog was read from."
+          mkdir -p "$work"
+          if [[ $(git rev-parse HEAD) != "$BASE_SHA" ]]; then
+            echo "::error::The checkout is not the commit the files were read from."
             exit 1
           fi
           if [[ ! -f pnpm-lock.yaml ]]; then
-            printf 'na\nno pnpm-lock.yaml\n' > "$OUT/state"
+            # Without a lockfile, the pnpm update is `package.json` alone.
+            if [[ $KIND == catalog ]]; then
+              printf 'na\nno pnpm-lock.yaml\n' > "$OUT/state"
+            fi
             exit 0
           fi
+
+          if [[ $KIND == pnpm ]]; then
+            if ! cmp -s package.json "$OUT/old/package.json"; then
+              echo "::error::The checkout's package.json is not the one the update was built from."
+              exit 1
+            fi
+            # pnpm switches to the version in `packageManager` by itself, so the
+            # resolution below runs the new pnpm, checked on osv.dev already.
+            cp "$OUT/new/package.json" package.json
+            allowed='^ M (package\.json|pnpm-lock\.yaml)$'
+          else
+          # The catalog edit, up to the matching `fi`.
+          if ! cmp -s pnpm-workspace.yaml "$SRC/pnpm-workspace.yaml"; then
+            echo "::error::The checkout is not the commit the catalog was read from."
+            exit 1
+          fi
+          allowed='^ M (pnpm-lock|pnpm-workspace)\.yaml$'
 
           # Edits only the version on each catalog line, so comments, quotes and
           # blank lines stay as they are (`yq -i` drops blank lines). yq then
@@ -554,6 +587,7 @@ jobs:
           }
           check_catalog "$work/pnpm-workspace.yaml"
           cp "$work/pnpm-workspace.yaml" pnpm-workspace.yaml
+          fi
 
           # The registry packages of a lockfile, as the dashboard lists them.
           locked() {
@@ -577,18 +611,47 @@ jobs:
           # neither lifecycle scripts nor `.pnpmfile.cjs` run. CI sets
           # `--frozen-lockfile` by default, so it is turned off here.
           if ! pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile; then
-            echo "::error::pnpm could not resolve the catalog updates (see above); the dashboard still lists them."
+            echo "::error::pnpm could not resolve the lockfile for the $KIND update (see above); the dashboard still lists it."
             exit 1
           fi
-          check_catalog pnpm-workspace.yaml
-          unexpected=$(git status --porcelain --untracked-files=all | grep -vE '^ M (pnpm-lock|pnpm-workspace)\.yaml$' || true)
+          if [[ $KIND == catalog ]]; then
+            check_catalog pnpm-workspace.yaml
+          fi
+          unexpected=$(git status --porcelain --untracked-files=all | grep -vE "$allowed" || true)
           if [[ -n $unexpected ]]; then
-            echo "::error::Resolving changed files other than pnpm-workspace.yaml and pnpm-lock.yaml: $unexpected"
+            echo "::error::Resolving the lockfile changed other files: $unexpected"
             exit 1
           fi
           locked pnpm-lock.yaml > "$work/after.json"
           jq -c --slurpfile before "$work/before.json" '(. - $before[0])[]' "$work/after.json" > "$work/new.jsonl"
           added=$(wc -l < "$work/new.jsonl")
+
+          if [[ $KIND == pnpm ]]; then
+            # A lockfile without the pin stays as it was.
+            if cmp -s pnpm-lock.yaml "$work/before.yaml"; then
+              exit 0
+            fi
+            version=$(jq -r '.packageManager | capture("^pnpm@(?<v>[0-9.]+)").v' package.json)
+            pinned=$(yq ea '[.] | .[0].importers["."].packageManagerDependencies.pnpm.version // ""' pnpm-lock.yaml)
+            if [[ $pinned != "$version" ]]; then
+              echo "::error::pnpm-lock.yaml pins pnpm '$pinned' after resolving, not $version."
+              exit 1
+            fi
+            others=$(jq -r 'select(.name != "pnpm" and (.name | startswith("@pnpm/") | not)) | "\(.name)@\(.version)"' "$work/new.jsonl")
+            if [[ -n $others ]]; then
+              echo "::error::Resolving for pnpm $version also changed other packages: $others"
+              exit 1
+            fi
+            jq -c '{name, version}' "$work/new.jsonl" >> "$OUT/osv-queries.jsonl"
+            git show HEAD:pnpm-lock.yaml > "$OUT/old/pnpm-lock.yaml"
+            cp pnpm-lock.yaml "$OUT/new/pnpm-lock.yaml"
+            echo pnpm-lock.yaml >> "$OUT/paths"
+            {
+              echo
+              echo "\`pnpm-lock.yaml\` pins pnpm itself, so it is resolved again: $added new locked versions of pnpm's own packages, all checked on osv.dev."
+            } >> "$OUT/content.md"
+            exit 0
+          fi
 
           # A package in `minimumReleaseAgeExclude` or `trustPolicyExclude`
           # skips the guard checked above, so a new version of one is left to a
@@ -603,7 +666,7 @@ jobs:
             printf 'current\nthe update adds versions that pnpm-workspace.yaml excludes from its cooldown or trust check (%s); update those by hand\n' "$excluded" > "$OUT/state"
             exit 0
           fi
-          jq -c '{name, version}' "$work/new.jsonl" > "$OUT/osv-queries.jsonl"
+          jq -c '{name, version}' "$work/new.jsonl" >> "$OUT/osv-queries.jsonl"
 
           for path in pnpm-workspace.yaml pnpm-lock.yaml; do
             git show "HEAD:$path" > "$OUT/old/$path"

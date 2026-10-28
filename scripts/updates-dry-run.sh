@@ -105,22 +105,20 @@ run_kind() {
     node) run_step "Node.js: find the update" "$RUNNER_TEMP" || return 0 ;;
     pnpm) run_step "pnpm: find the update" "$RUNNER_TEMP" || return 0 ;;
     gitleaks) run_step "gitleaks: find the update" "$RUNNER_TEMP" || return 0 ;;
-    catalog)
-      run_step "Dependencies: pick the updates" "$RUNNER_TEMP" || return 0
-      if grep -q '^resolve=true' "$GITHUB_OUTPUT"; then
-        local checkout="$RUNNER_TEMP/checkout" base_sha
-        base_sha=$(sed -n 's/^BASE_SHA=//p' "$GITHUB_ENV")
-        git init -q "$checkout"
-        git -C "$checkout" fetch -q --depth 1 "https://github.com/$REPO.git" "$base_sha"
-        git -C "$checkout" checkout -q FETCH_HEAD
-        run_step "Dependencies: resolve the lockfile" "$checkout" || return 0
-      fi
-      ;;
+    catalog) run_step "Dependencies: pick the updates" "$RUNNER_TEMP" || return 0 ;;
     *)
       echo "::error::Unknown kind '$KIND'; use node, pnpm, gitleaks or catalog." >&2
       exit 1
       ;;
   esac
+  if grep -q '^RESOLVE=true' "$GITHUB_ENV"; then
+    local checkout="$RUNNER_TEMP/checkout" base_sha
+    base_sha=$(sed -n 's/^BASE_SHA=//p' "$GITHUB_ENV")
+    git init -q "$checkout"
+    git -C "$checkout" fetch -q --depth 1 "https://github.com/$REPO.git" "$base_sha"
+    git -C "$checkout" checkout -q FETCH_HEAD
+    run_step "Lockfile: resolve" "$checkout" || return 0
+  fi
   run_step "Check the new versions on osv.dev" "$RUNNER_TEMP" || return 0
   run_step "Open or update the PR" "$RUNNER_TEMP" || return 0
 }
