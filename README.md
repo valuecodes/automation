@@ -129,9 +129,11 @@ Supply chain guards:
   open one and makes the run red.
 - A package with an update signal is left out and listed in the PR. Nothing auto-merges.
 
-CI: a PR opened with `GITHUB_TOKEN` does not start `pull_request` workflows. Set `ci-workflow`
-to a workflow with `on: workflow_dispatch:`, and the run starts it on each pushed branch. Keep
-that CI free of secrets, since it runs the new versions.
+CI: on a PR opened with `GITHUB_TOKEN`, `pull_request` workflows wait until someone with write
+access approves them in the PR. To run CI without that click, set `ci-workflow` to a workflow
+with `on: workflow_dispatch:`, and the run starts it on each pushed branch. The PR then also
+shows the `pull_request` runs waiting for approval; you can leave them. Keep that CI free of
+secrets, since it runs the new versions.
 
 To see the PRs a repo would get, run `scripts/updates-dry-run.sh owner/repo [kind...]`.
 

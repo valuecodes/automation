@@ -882,9 +882,9 @@ jobs:
           title=$(< "$OUT/title")
           content=$(< "$OUT/content.md")
           if [[ -n $CI_WORKFLOW ]]; then
-            content="$content"$'\n\n'"CI runs through \`workflow_dispatch\` of \`$CI_WORKFLOW\`, because a PR opened with \`GITHUB_TOKEN\` does not start \`pull_request\` workflows."
+            content="$content"$'\n\n'"CI runs through \`workflow_dispatch\` of \`$CI_WORKFLOW\`, so it starts without approval. GitHub holds this PR's \`pull_request\` runs for approval; you can leave them."
           else
-            content="$content"$'\n\n'"This PR was opened with \`GITHUB_TOKEN\`, which does not start \`pull_request\` workflows: close and reopen it to run CI, or set \`ci-workflow\` in the caller."
+            content="$content"$'\n\n'"This PR was opened with \`GITHUB_TOKEN\`, so its \`pull_request\` workflows wait for approval: use **Approve workflows to run** in the PR, or set \`ci-workflow\` in the caller."
           fi
           if [[ -n $DASHBOARD ]]; then
             content="$content"$'\n\n'"Dashboard: #$DASHBOARD"
