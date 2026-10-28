@@ -67,7 +67,9 @@ jobs:
 
   # The same for the update PRs: dry run plans each PR against this repo's
   # default branch into the run summary and pushes nothing. The write grants
-  # are checked against the called jobs' permissions, as above.
+  # are checked against the called jobs' permissions, as above, so this job
+  # holds write scopes it never uses; every write in the workflow sits behind
+  # `dry-run`. PRs from forks get a read-only token anyway.
   maintenance-updates:
     permissions:
       contents: write

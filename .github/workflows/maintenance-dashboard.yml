@@ -309,7 +309,14 @@ jobs:
             printf 'na\tnot applicable\tno pnpm-workspace.yaml\n' > "$status_file"
             exit 0
           fi
-          yq -o=json '.catalog // {}' "$SRC/pnpm-workspace.yaml" > "$work/catalog.json"
+          # Keys become registry URLs in a curl config file, so anything that is
+          # not an npm package name is left out instead of quoted.
+          yq -o=json '.catalog // {}' "$SRC/pnpm-workspace.yaml" |
+            jq 'with_entries(select(.key | test("^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$")))' > "$work/catalog.json"
+          invalid=$(( $(yq '.catalog // {} | length' "$SRC/pnpm-workspace.yaml") - $(jq 'length' "$work/catalog.json") ))
+          if (( invalid > 0 )); then
+            echo "::warning::$invalid catalog entries are not npm package names and were skipped."
+          fi
           total=$(jq 'length' "$work/catalog.json")
           if [[ $total == 0 ]]; then
             echo "**Dependencies:** not applicable, no \`catalog:\` in \`pnpm-workspace.yaml\`." > "$out"
