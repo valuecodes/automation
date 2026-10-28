@@ -618,6 +618,79 @@ jobs:
           git show HEAD:pnpm-lock.yaml > "$work/before.yaml"
           locked "$work/before.yaml" > "$work/before.json"
 
+          # A failed resolution leaves its evidence in the run summary: what the
+          # run changed, what pnpm saw, the registry's view of the package pnpm
+          # named, and whether the unchanged lockfile still resolves here. That
+          # last check tells a bad update from a bad runner or registry view;
+          # it discards the edit, so it runs last. Nothing here may fail the
+          # step on its own, and every excerpt is capped, indented (content
+          # cannot close an indented block) and redacted before it is Markdown.
+          diagnose() {
+            section() {
+              {
+                echo
+                echo "**$1**"
+                echo
+                head -c 20000 | sed -E 's#(://[^/@[:space:]]*)@#://***@#g; s/^([^=]*(_auth|_password|[Tt]oken)[^=]*=).*/\1***/' | sed 's/^/    /'
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+            }
+            echo "## Lockfile resolution failed ($KIND)" >> "$GITHUB_STEP_SUMMARY"
+            { pnpm --config.pm-on-fail=warn --version; node --version; } 2>&1 | section "Versions (pnpm, Node.js)" || true
+            git diff -- pnpm-workspace.yaml package.json 2>&1 | section "The update's edit" || true
+            pnpm --config.pm-on-fail=warn config list 2>&1 | section "pnpm's view of the config" || true
+            {
+              env | cut -d= -f1 | grep -E '^(npm_config_|NPM_CONFIG_|PNPM_|COREPACK_|NODE_)' | sort || true
+              for rc in "$HOME/.npmrc" "${XDG_CONFIG_HOME:-$HOME/.config}/pnpm/rc"; do
+                if [[ -f $rc ]]; then
+                  echo "$rc: keys $(cut -d= -f1 "$rc" | paste -sd ',')"
+                else
+                  echo "$rc: absent"
+                fi
+              done
+            } 2>&1 | section "Runner configuration (names only)" || true
+            # pnpm wraps its message and prefixes box-drawing characters, so each
+            # line loses everything before its first word (byte-wise, as the
+            # prefixes are multibyte), the lines are joined and a scope split
+            # at `/` is re-joined. The name and spec are untrusted until they
+            # match the regexes.
+            local failed name spec enc name_re spec_re
+            failed=$(LC_ALL=C sed -E 's/^[^[:alnum:]@^~<>=*.]*//' "$work/pnpm.log" | tr '\n' ' ' | sed -E 's#/ +#/#g' | grep -oE 'No matching version found for [^ ]+ ' | head -n 1 || true)
+            name=${failed#No matching version found for }
+            name=${name% }
+            spec=${name##*@}
+            name=${name%@*}
+            # The npm name rule as a POSIX class (hyphen last, unlike the jq copy).
+            name_re='^(@[a-z0-9~-][a-z0-9._~-]*/)?[a-z0-9~-][a-z0-9._~-]*$'
+            spec_re='^[0-9A-Za-z.+*^~<>=|:-]{1,64}$'
+            if [[ $name =~ $name_re && $spec =~ $spec_re ]]; then
+              enc=${name//\//%2F}
+              {
+                echo "$name@$spec on registry.npmjs.org (not the caller's registry, if it uses another)"
+                if curl -fsS --compressed -D "$work/registry.headers" -o "$work/registry.json" "https://registry.npmjs.org/$enc"; then
+                  grep -iE '^(date|cf-cache-status|age|last-modified|etag|cf-ray):' "$work/registry.headers" || true
+                  jq -r --arg v "$spec" '
+                    "dist-tags: \(."dist-tags" | to_entries | map("\(.key)=\(.value)") | join(" "))",
+                    "versions: \(.versions | length), time.modified: \(.time.modified)",
+                    "has versions[\($v)]: \(.versions | has($v)), has time[\($v)]: \(.time | has($v))",
+                    "newest by publish time: \([.time | to_entries[] | select(.key | test("^[0-9]"))] | sort_by(.value) | .[-5:] | map("\(.key) \(.value)") | join(", "))"
+                  ' "$work/registry.json"
+                else
+                  echo "the packument request failed"
+                fi
+              } 2>&1 | section "Registry view of the failing package" || true
+            else
+              echo "pnpm named no package, or its name or spec did not validate" | section "Registry view of the failing package" || true
+            fi
+            git checkout -- pnpm-workspace.yaml package.json pnpm-lock.yaml || true
+            if pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.pm-on-fail=warn > "$work/pnpm-control.log" 2>&1; then
+              { echo "resolves: the runner is fine; the update itself does not resolve"; tail -n 5 "$work/pnpm-control.log"; } | section "Control: the unchanged lockfile" || true
+            else
+              { echo "fails: this runner or its registry view is broken, not the update"; tail -n 40 "$work/pnpm-control.log"; } | section "Control: the unchanged lockfile" || true
+            fi
+            section "pnpm output" < "$work/pnpm.log" || true
+          }
+
           # Resolves without installing: nothing is downloaded or unpacked, and
           # neither lifecycle scripts nor `.pnpmfile.cjs` run. CI sets
           # `--frozen-lockfile` by default, so it is turned off here. The pnpm
@@ -628,8 +701,11 @@ jobs:
             echo "::error::pnpm $ran would resolve the lockfile, not the pinned $trusted."
             exit 1
           fi
-          if ! pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.pm-on-fail=warn; then
-            echo "::error::pnpm could not resolve the lockfile for the $KIND update (see above); the dashboard still lists it."
+          # Both streams go to the log and to `$work/pnpm.log`; with pipefail
+          # the pipeline's status is pnpm's, since `tee` exits 0.
+          if ! pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.pm-on-fail=warn 2>&1 | tee "$work/pnpm.log"; then
+            diagnose
+            echo "::error::pnpm could not resolve the lockfile for the $KIND update (see above and the run summary); the dashboard still lists it."
             exit 1
           fi
           if [[ $KIND == catalog ]]; then
