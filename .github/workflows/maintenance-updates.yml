@@ -682,10 +682,15 @@ jobs:
             else
               echo "pnpm named no package, or its name or spec did not validate" | section "Registry view of the failing package" || true
             fi
-            git checkout -- pnpm-workspace.yaml package.json pnpm-lock.yaml || true
-            # A pass here does not clear the registry: a satisfied lockfile may
-            # skip the very request the update needed.
-            if timeout 300 pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.pm-on-fail=warn > "$work/pnpm-control.log" 2>&1; then
+            # Only tracked files can be restored (the pnpm kind runs without a
+            # `pnpm-workspace.yaml`), and the control runs only on a verified
+            # restore, so it never judges an edited tree. A pass here does not
+            # clear the registry either: a satisfied lockfile may skip the very
+            # request the update needed.
+            git ls-files -z -- pnpm-workspace.yaml package.json pnpm-lock.yaml | xargs -0 -r git checkout -- || true
+            if [[ -n $(git status --porcelain -- pnpm-workspace.yaml package.json pnpm-lock.yaml || true) ]]; then
+              echo "skipped: the update's edit could not be restored" | section "Control: the unchanged lockfile" || true
+            elif timeout 300 pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts --ignore-pnpmfile --config.pm-on-fail=warn > "$work/pnpm-control.log" 2>&1; then
               { echo "resolves on this runner; the update's own requests may still have failed"; tail -n 5 "$work/pnpm-control.log"; } | section "Control: the unchanged lockfile" || true
             else
               { echo "fails on this runner too: the runner or its registry view is broken, not only the update"; tail -n 40 "$work/pnpm-control.log"; } | section "Control: the unchanged lockfile" || true
