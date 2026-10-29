@@ -1,6 +1,5 @@
 // The OpenSSF malicious-packages feed through osv.dev's batch query. Only
 // `MAL-*` ids count here; GHSA ids are `pnpm audit`'s job.
-// maintenance-updates.yml has a copy of this rule; keep the two in step.
 
 import { Fail } from "./env.ts";
 import { fetchJson } from "./http.ts";

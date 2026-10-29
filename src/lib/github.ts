@@ -1,11 +1,10 @@
-// The GitHub REST API with the job's `GH_TOKEN`, replacing `gh api`. Only
-// the calls the dashboard makes; every one is a plain request with a JSON
-// answer.
+// The GitHub REST API with the job's `GH_TOKEN`, replacing `gh api`. Every
+// call is a plain request with a JSON answer, or none for a 204.
 
 import { env } from "./env.ts";
 import { HttpError, request } from "./http.ts";
 
-type Method = "GET" | "POST" | "PATCH" | "PUT";
+type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 type Api = <T>(method: Method, path: string, body?: unknown) => Promise<T>;
 

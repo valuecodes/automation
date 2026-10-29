@@ -1,7 +1,7 @@
 // Exact semantic versions, and the one question every version check asks:
 // which newer stable, old-enough release exists on the current major and on
-// a higher one. maintenance-updates.yml has a copy of this rule in jq; keep
-// the two in step.
+// a higher one. The dashboard lists what this finds and the update workflow
+// proposes it, so a PR always proposes the version the dashboard lists.
 
 const EXACT = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 
@@ -30,11 +30,13 @@ const stamp = (iso: string): number => Math.floor(Date.parse(iso) / 1000);
 
 type PackumentVersion = {
   deprecated?: unknown;
-  dist?: { attestations?: unknown };
+  dist?: { attestations?: unknown; tarball?: string; integrity?: string };
   _npmUser?: { name?: string; trustedPublisher?: { id?: string } };
 };
 
 type Packument = {
+  name?: string;
+  "dist-tags"?: { latest?: string };
   versions?: Record<string, PackumentVersion>;
   time?: Record<string, string>;
   maintainers?: { name?: string }[];
@@ -99,5 +101,5 @@ const newer = (
   };
 };
 
-export { EXACT, parse, compare, stamp, newer };
+export { parse, compare, stamp, newer };
 export type { Version, Packument, Newer };
