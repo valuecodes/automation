@@ -160,7 +160,10 @@ const render = (
   if (outdated + unparsed === 0) {
     const notes = phantom.map((p) => `${phantomLine(p)}\n`).join("");
     return {
-      markdown: `**Dependencies:** all ${total} catalog packages are up to date.\n${notes}`,
+      markdown:
+        phantom.length === 0
+          ? `**Dependencies:** all ${total} catalog packages are up to date.\n`
+          : `**Dependencies:** no confirmed update for ${plural(total, "catalog package")}.\n${notes}`,
       status:
         phantom.length === 0
           ? {
