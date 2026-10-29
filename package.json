@@ -3,12 +3,23 @@
   "private": true,
   "description": "Reusable GitHub Actions workflows",
   "license": "MIT",
+  "type": "module",
   "scripts": {
     "format": "oxfmt",
-    "format:check": "oxfmt --check"
+    "format:check": "oxfmt --check",
+    "lint": "oxlint --type-aware --report-unused-disable-directives",
+    "knip": "knip",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config --local core.hooksPath .githooks || true"
   },
   "devDependencies": {
-    "oxfmt": "catalog:"
+    "@types/node": "catalog:",
+    "knip": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
+    "typescript": "catalog:"
   },
   "engines": {
     "node": "^24.22.1 || >=26.12.1"

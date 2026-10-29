@@ -1,0 +1,7 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // The dispatcher is what the workflow runs; everything else is reached from
+  // it or from a test.
+  "entry": ["src/dashboard/main.ts", "src/**/*.test.ts"],
+  "project": ["src/**/*.ts"],
+}
