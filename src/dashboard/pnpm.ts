@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { warning } from "../lib/actions.ts";
 import { context } from "../lib/env.ts";
 import { fetchJson } from "../lib/http.ts";
-import { versionExists } from "../lib/npm.ts";
+import { resolvable } from "../lib/npm.ts";
 import { writeSection } from "../lib/sections.ts";
 import type { Status } from "../lib/sections.ts";
 import { dropVersion, newer } from "../lib/versions.ts";
@@ -18,13 +18,13 @@ const status = (n: Newer, unserved: string[] = []): Status => {
   const note =
     unserved.length === 0
       ? ""
-      : `; the registry lists ${unserved.join(", ")} but does not serve it`;
+      : `; the full packument lists ${unserved.join(", ")} but pnpm cannot resolve it`;
   if (n.inMajor === null && n.major === null) {
     return unserved.length === 0
       ? { state: "ok", text: "up to date", details: n.current }
       : {
           state: "warn",
-          text: `${unserved.length} not served`,
+          text: `${unserved.length} not resolvable`,
           details: `${n.current}${note}`,
         };
   }
@@ -81,16 +81,14 @@ const pnpm = async (): Promise<void> => {
     headers: { accept: "application/json" },
   });
   let picked = newer(pack, "pnpm", m[1] ?? "", readCutoff(ctx.src), null);
-  // The packument's word is not enough: the version endpoint has to serve
-  // each pick too, as in the catalog step.
+  // The full packument's word is not enough: the abbreviated one, which pnpm
+  // resolves from, has to list each pick too, as in the catalog step.
   const targets = [picked.inMajor, picked.major].filter((v) => v !== null);
-  const served = await Promise.all(
-    targets.map((v) => versionExists("pnpm", v)),
-  );
+  const served = await Promise.all(targets.map((v) => resolvable("pnpm", v)));
   const unserved = targets.filter((_, i) => served[i] === false);
   for (const version of unserved) {
     warning(
-      `The packument lists pnpm ${version} but the registry does not serve it; ignored.`,
+      `The full packument lists pnpm ${version} but the abbreviated one pnpm resolves from does not; ignored.`,
     );
     picked = dropVersion(picked, version);
   }

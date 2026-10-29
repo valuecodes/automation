@@ -1,16 +1,19 @@
 // Packuments from the npm registry, saved under `$RUNNER_TEMP/npm` so the
 // supply chain step can read what the catalog step downloaded, and the
-// second question every pick has to pass: does the registry serve this
-// version at all? A packument is one cached object, and one has listed a
-// version the registry never had, so no version is used on its word alone.
+// second question every pick has to pass: can pnpm resolve this version? A
+// full packument is one cached object, and one has listed a version the
+// registry never had, so no version is used on its word alone.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { HttpError, request } from "./http.ts";
+import { request } from "./http.ts";
 import type { Packument } from "./versions.ts";
 
 const NAME = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 
 const REGISTRY = "https://registry.npmjs.org";
+
+/** The abbreviated packument, the document pnpm resolves from. */
+const ABBREVIATED = "application/vnd.npm.install-v1+json";
 
 const encodeName = (name: string): string => name.replaceAll("/", "%2F");
 
@@ -50,28 +53,23 @@ const readPackument = (dir: string, name: string): Packument =>
 type Get = (url: string, init?: RequestInit) => Promise<Response>;
 
 /**
- * Whether the registry serves this exact version, asked of its version
- * endpoint: a different URL and so a different cached object than the
- * packument the version was picked from. A 404 is "no"; any other failure
- * is an outage and propagates.
+ * Whether pnpm can resolve this exact version: whether the abbreviated
+ * packument, the document pnpm asks the registry for and a different cached
+ * object than the full one the version was picked from, lists it. Any
+ * failure of the request is an outage and propagates.
  */
-const versionExists = async (
+const resolvable = async (
   name: string,
   version: string,
   get: Get = request,
 ): Promise<boolean> => {
-  try {
-    const response = await get(`${REGISTRY}/${encodeName(name)}/${version}`, {
-      headers: { accept: "application/json" },
-    });
-    const body = (await response.json()) as { version?: unknown };
-    return body.version === version;
-  } catch (error) {
-    if (error instanceof HttpError && error.status === 404) {
-      return false;
-    }
-    throw error;
-  }
+  const response = await get(`${REGISTRY}/${encodeName(name)}`, {
+    headers: { accept: ABBREVIATED },
+  });
+  const body = (await response.json()) as {
+    versions?: Record<string, unknown>;
+  };
+  return Object.hasOwn(body.versions ?? {}, version);
 };
 
-export { NAME, downloadPackuments, readPackument, versionExists };
+export { NAME, downloadPackuments, readPackument, resolvable };

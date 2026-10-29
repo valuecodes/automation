@@ -10,7 +10,7 @@ import {
   NAME,
   downloadPackuments,
   readPackument,
-  versionExists,
+  resolvable,
 } from "../lib/npm.ts";
 import { writeSection } from "../lib/sections.ts";
 import type { Status } from "../lib/sections.ts";
@@ -103,17 +103,18 @@ const tableRows = (rows: Row[]): string[] => {
     });
 };
 
-/** A version a packument listed but the registry does not serve. */
+/** A version the full packument listed but pnpm cannot resolve. */
 type Phantom = { name: string; version: string };
 
 /**
- * Every picked version against the registry's version endpoint. A version
- * it does not serve leaves its row, with its date, and is reported instead
- * of listed, so the issue and the supply chain step never name it.
+ * Every picked version against the abbreviated packument, the document pnpm
+ * resolves from. A version missing there leaves its row, with its date, and
+ * is reported instead of listed, so the issue and the supply chain step
+ * never name it.
  */
 const confirm = async (
   rows: Row[],
-  exists: (name: string, version: string) => Promise<boolean> = versionExists,
+  exists: (name: string, version: string) => Promise<boolean> = resolvable,
 ): Promise<{ rows: Row[]; phantom: Phantom[] }> => {
   const picks: Phantom[] = [];
   for (const row of rows) {
@@ -138,7 +139,7 @@ const confirm = async (
 };
 
 const phantomLine = (p: Phantom): string =>
-  `The registry lists \`${esc(p.name)}\` ${p.version} but does not serve it; ignored.`;
+  `The full packument of \`${esc(p.name)}\` lists ${p.version}, but the one pnpm resolves from does not; ignored.`;
 
 type Rendered = {
   markdown: string;
@@ -173,8 +174,8 @@ const render = (
             }
           : {
               state: "warn",
-              text: `${phantom.length} not served`,
-              details: `${plural(total, "package")}, ${phantom.length} not served by the registry`,
+              text: `${phantom.length} not resolvable`,
+              details: `${plural(total, "package")}, ${phantom.length} listed but not resolvable`,
             },
       rows: null,
     };
@@ -187,7 +188,7 @@ const render = (
     details.push(`${unparsed} not an exact version`);
   }
   if (phantom.length > 0) {
-    details.push(`${phantom.length} not served by the registry`);
+    details.push(`${phantom.length} listed but not resolvable`);
   }
   const lines = [
     "### Dependencies (`catalog:` in `pnpm-workspace.yaml`)",
@@ -230,7 +231,7 @@ const render = (
           text:
             unparsed > 0
               ? `${unparsed} not an exact version`
-              : `${phantom.length} not served`,
+              : `${phantom.length} not resolvable`,
           details: details.join(", "),
         };
   return { markdown: `${lines.join("\n")}\n`, status, rows: tableRows(rows) };
@@ -301,7 +302,7 @@ const catalog = async (): Promise<void> => {
   const { rows, phantom } = await confirm(picked);
   for (const p of phantom) {
     warning(
-      `The packument lists ${p.name} ${p.version} but the registry does not serve it; ignored. See the download log above for the edge that served the packument.`,
+      `The full packument of ${p.name} lists ${p.version}, but the abbreviated one pnpm resolves from does not; ignored. The download log above names the edge and object that served the full packument.`,
     );
   }
   // The supply chain step reuses the rows and the packuments.

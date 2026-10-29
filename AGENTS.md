@@ -112,9 +112,10 @@ is the check to require on `main`.
 - **Shell:** every `run:` starts with `set -euo pipefail`. Quote expansions. Fail loudly with
   `::error::` and a message that says what to fix.
 - **External data is untrusted:** validate versions with a regex before using them, confirm a
-  version picked from a packument with the registry's version endpoint before proposing or
-  listing it (a cached packument once listed a version that never existed), and escape
-  anything that lands in Markdown.
+  version picked from a full packument against the abbreviated one pnpm resolves from before
+  proposing or listing it (a cached full packument once listed a version that never existed),
+  send an explicit `accept` header on every registry request, and escape anything that lands
+  in Markdown.
 - **Every job** has `timeout-minutes`; jobs that write shared state have a `concurrency` group.
 - **Job names are check names.** A caller sees each job of a reusable workflow as
   `<caller job> / <job name>`, and callers usually name their job after the file. So name jobs

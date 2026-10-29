@@ -281,7 +281,7 @@ jobs:
           fi
           cur=${BASH_REMATCH[1]}
           hashed=${BASH_REMATCH[2]}
-          curl -fsSL --compressed --retry 3 -o "$RUNNER_TEMP/pnpm.json" https://registry.npmjs.org/pnpm
+          curl -fsSL --compressed --retry 3 -H 'accept: application/json' -o "$RUNNER_TEMP/pnpm.json" https://registry.npmjs.org/pnpm
           newer=$(jq -c --arg name pnpm --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" --argjson maxmajor null \
             -f "$SRC/newer.jq" "$RUNNER_TEMP/pnpm.json")
           version=$(jq -r '.inMajor // empty' <<<"$newer")
@@ -290,21 +290,17 @@ jobs:
             printf 'current\npnpm %s is up to date%s\n' "$cur" "${major:+ on its major (pnpm $major stays on the dashboard)}" > "$OUT/state"
             exit 0
           fi
-          # The packument is one cached object, and one has listed a version
-          # the registry never had, so the version endpoint (another object)
-          # has to serve the pick before anything, even the signal check,
-          # judges it. Not served is inconclusive: `unclear` leaves an open PR
-          # alone. Anything but 200 or 404 is an outage.
-          code=$(curl -sS --compressed --retry 3 --retry-connrefused -o "$RUNNER_TEMP/pnpm-version.json" -w '%{http_code}' "https://registry.npmjs.org/pnpm/$version" || true)
-          if [[ $code == 200 ]] && jq -e --arg v "$version" '.version == $v' "$RUNNER_TEMP/pnpm-version.json" > /dev/null; then
-            :
-          elif [[ $code == 200 || $code == 404 ]]; then
-            echo "::warning::The packument lists pnpm $version but the registry does not serve it (HTTP $code); nothing proposed this run."
-            printf 'unclear\nthe registry lists pnpm %s but does not serve it; nothing proposed this run\n' "$version" > "$OUT/state"
+          # The full packument is one cached object, and one has listed a
+          # version the registry never had, so the abbreviated packument, the
+          # document pnpm resolves from and another cached object, has to list
+          # the pick before anything, even the signal check, judges it. Not
+          # listed is inconclusive: `unclear` leaves an open PR alone. A
+          # failed request is an outage.
+          curl -fsSL --compressed --retry 3 --retry-connrefused -H 'accept: application/vnd.npm.install-v1+json' -o "$RUNNER_TEMP/pnpm.abbrev.json" https://registry.npmjs.org/pnpm
+          if ! jq -e --arg v "$version" '.versions | has($v)' "$RUNNER_TEMP/pnpm.abbrev.json" > /dev/null; then
+            echo "::warning::The full packument lists pnpm $version but the abbreviated one pnpm resolves from does not; nothing proposed this run."
+            printf 'unclear\nthe full packument lists pnpm %s but the one pnpm resolves from does not; nothing proposed this run\n' "$version" > "$OUT/state"
             exit 0
-          else
-            echo "::error::Could not confirm pnpm $version with the registry (HTTP $code)."
-            exit 1
           fi
           if [[ -n $(jq -r --arg name pnpm --arg cur "$cur" --arg target "$version" -f "$SRC/signals.jq" "$RUNNER_TEMP/pnpm.json") ]]; then
             printf 'current\npnpm %s is held back by update signals, see the dashboard\n' "$version" > "$OUT/state"
@@ -473,7 +469,7 @@ jobs:
             enc=${name//\//%2F}
             printf 'url = "https://registry.npmjs.org/%s"\noutput = "%s/%s.json"\n' "$enc" "$work" "$enc"
           done > "$work/urls.txt"
-          curl -fsSL --compressed --retry 3 --parallel --parallel-max 6 --config "$work/urls.txt" \
+          curl -fsSL --compressed --retry 3 --parallel --parallel-max 6 --config "$work/urls.txt" -H 'accept: application/json' \
             -w '%{url} %{http_code} cf-ray=%header{cf-ray} cf-cache-status=%header{cf-cache-status} age=%header{age} etag=%header{etag}\n' > "$work/packuments.log"
 
           : > "$work/kept.jsonl"
@@ -496,23 +492,20 @@ jobs:
             if [[ -z $target ]]; then
               continue
             fi
-            # The packument is one cached object, and one has listed a version
-            # the registry never had, so the version endpoint (another object)
-            # has to serve the pick before anything, even the signal check,
-            # judges it. Not served leaves the package out of this run, in the
-            # PR's "Left out" table. Anything but 200 or 404 is an outage and
-            # fails the step.
-            code=$(curl -sS --compressed --retry 3 --retry-connrefused -o "$work/version.json" -w '%{http_code}' "https://registry.npmjs.org/${name//\//%2F}/$target" || true)
-            if [[ $code == 200 ]] && jq -e --arg v "$target" '.version == $v' "$work/version.json" > /dev/null; then
-              :
-            elif [[ $code == 200 || $code == 404 ]]; then
-              echo "::warning::The packument lists $name $target but the registry does not serve it (HTTP $code); left out. Download: $(grep -F "/${name//\//%2F} " "$work/packuments.log" || true)"
-              printf '| `%s` | %s → %s | not served by the registry (version endpoint answered HTTP %s); the packument may be stale |\n' "$name" "$cur" "$target" "$code" >> "$work/flagged.md"
+            # The full packument is one cached object, and one has listed a
+            # version the registry never had, so the abbreviated packument,
+            # the document pnpm resolves from and another cached object, has
+            # to list the pick before anything, even the signal check, judges
+            # it. Not listed leaves the package out of this run, in the PR's
+            # "Left out" table. A failed request is an outage and fails the
+            # step.
+            curl -fsSL --compressed --retry 3 --retry-connrefused -H 'accept: application/vnd.npm.install-v1+json' -o "$work/${name//\//%2F}.abbrev.json" "https://registry.npmjs.org/${name//\//%2F}"
+            if ! jq -e --arg v "$target" '.versions | has($v)' "$work/${name//\//%2F}.abbrev.json" > /dev/null; then
+              echo "::warning::The full packument lists $name $target but the abbreviated one pnpm resolves from does not; left out. Download: $(grep -F "/${name//\//%2F} " "$work/packuments.log" || true)"
+              jq -nr --arg name "$name" --arg cur "$cur" --arg target "$target" \
+                '"| `\($name)` | \($cur) → \($target) | the full packument lists it, the one pnpm resolves from does not; the full one may be stale |"' >> "$work/flagged.md"
               echo "$name $target" >> "$work/phantom.txt"
               continue
-            else
-              echo "::error::Could not confirm $name $target with the registry (HTTP $code)."
-              exit 1
             fi
             flagged=$(jq -r --arg name "$name" --arg cur "$cur" --arg target "$target" -f "$SRC/signals.jq" "$packument")
             if [[ -n $flagged ]]; then
@@ -537,7 +530,7 @@ jobs:
               if (( phantom > 1 )); then
                 more=" and $(( phantom - 1 )) more"
               fi
-              printf 'unclear\nthe registry lists %s %s but does not serve it%s; nothing proposed this run\n' "$pname" "$pversion" "$more" > "$OUT/state"
+              printf 'unclear\nthe full packument lists %s %s but the one pnpm resolves from does not%s; nothing proposed this run\n' "$pname" "$pversion" "$more" > "$OUT/state"
               exit 0
             fi
             if (( flagged > 0 )); then
@@ -726,7 +719,7 @@ jobs:
               enc=${name//\//%2F}
               {
                 echo "$name@$spec on registry.npmjs.org (not the caller's registry, if it uses another)"
-                if curl -fsS --compressed --connect-timeout 10 --max-time 60 -D "$work/registry.headers" -o "$work/registry.json" "https://registry.npmjs.org/$enc"; then
+                if curl -fsS --compressed --connect-timeout 10 --max-time 60 -H 'accept: application/json' -D "$work/registry.headers" -o "$work/registry.json" "https://registry.npmjs.org/$enc"; then
                   grep -iE '^(date|cf-cache-status|age|last-modified|etag|cf-ray):' "$work/registry.headers" || true
                   jq -r --arg v "$spec" '
                     "dist-tags: \(."dist-tags" | to_entries | map("\(.key)=\(.value)") | join(" "))",
@@ -737,6 +730,19 @@ jobs:
                 else
                   echo "the packument request failed"
                 fi
+                # What the pick step saw: its full and abbreviated packuments
+                # of this package are still on disk, so the entry it picked
+                # can be compared with what the registry says now.
+                for doc in "$work/$enc.json" "$work/$enc.abbrev.json"; do
+                  if [[ -f $doc ]]; then
+                    echo
+                    echo "the pick step's ${doc##*/}:"
+                    jq -r --arg v "$spec" '
+                      "  versions: \(.versions | length), has versions[\($v)]: \(.versions | has($v)), has time[\($v)]: \((.time // {}) | has($v))",
+                      "  versions[\($v)]: \(.versions[$v] | if . == null then "absent" else {time: $ARGS.named.t, tarball: .dist.tarball, integrity: .dist.integrity, publisher: ._npmUser, attestations: (.dist.attestations != null)} | tostring end)"
+                    ' --arg t "$(jq -r --arg v "$spec" '(.time // {})[$v] // "absent"' "$doc")" "$doc"
+                  fi
+                done
               } 2>&1 | section "Registry view of the failing package" || true
             else
               echo "pnpm named no package, or its name or spec did not validate" | section "Registry view of the failing package" || true
