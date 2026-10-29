@@ -89,7 +89,10 @@ const validSchedule = (schedule: Record<string, unknown>): Schedule => {
     }
     const entry = value as Record<string, unknown>;
     const fields = ["start", "lts", "maintenance", "end"] as const;
-    if (!fields.every((f) => entry[f] === undefined || isDate(entry[f]))) {
+    if (
+      !isDate(entry.end) ||
+      !fields.every((f) => entry[f] === undefined || isDate(entry[f]))
+    ) {
       continue;
     }
     const clean: ScheduleEntry = {};

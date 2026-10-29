@@ -59,10 +59,13 @@ run_step() {
   local name=$1 dir=$2 code
   echo "=== $KIND: $name" >&2
   : > "$GITHUB_OUTPUT"
-  set -a
-  # shellcheck disable=SC1090
-  . "$GITHUB_ENV"
-  set +a
+  # One `name=value` per line, exported as it is (a path may hold a space).
+  local line
+  while IFS= read -r line; do
+    if [[ -n $line ]]; then
+      export "${line?}"
+    fi
+  done < "$GITHUB_ENV"
   set +e
   (cd "$dir" && node "$root/src/updates/main.ts" "$name") >&2
   code=$?

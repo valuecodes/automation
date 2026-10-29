@@ -68,7 +68,8 @@ const plain = (text: string): Yaml => {
   if (text === "false") {
     return false;
   }
-  if (/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(text)) {
+  // Integers only: `1.10` is a version far more often than a float.
+  if (/^-?(0|[1-9][0-9]*)$/.test(text)) {
     return Number(text);
   }
   return text;
@@ -157,9 +158,16 @@ const readFlow = (text: string, at: number): [Yaml, number] => {
   return [plain(raw), end];
 };
 
-/** A value written on the key's line, or a sequence item's. */
+/**
+ * A value written on the key's line, or a sequence item's. Only a flow
+ * collection or a quoted scalar is read by its delimiters: a plain scalar
+ * runs to the end of the line, commas and all (`deprecated: x, see y`).
+ */
 const inline = (text: string): Yaml => {
   unsupported(text);
+  if (!/^[{['"]/.test(text)) {
+    return plain(text);
+  }
   const [value, end] = readFlow(text, 0);
   if (skipSpace(text, end) !== text.length) {
     throw new YamlError(`unexpected text after a value: ${text}`);
@@ -171,6 +179,9 @@ const inline = (text: string): Yaml => {
 const splitKey = (text: string): [string, string] | null => {
   let key: string;
   let end: number;
+  if (text.startsWith("{") || text.startsWith("[")) {
+    return null;
+  }
   if (text.startsWith("'") || text.startsWith('"')) {
     [key, end] = readQuoted(text, 0);
   } else {

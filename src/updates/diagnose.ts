@@ -61,7 +61,7 @@ const registryView = (pack: Packument, spec: string): string[] => {
       .map(([k, v]) => `${k}=${v}`)
       .join(" ")}`,
     `versions: ${Object.keys(pack.versions ?? {}).length}, time.modified: ${time.modified ?? "null"}`,
-    `has versions[${spec}]: ${spec in (pack.versions ?? {})}, has time[${spec}]: ${spec in time}`,
+    `has versions[${spec}]: ${Object.hasOwn(pack.versions ?? {}, spec)}, has time[${spec}]: ${Object.hasOwn(time, spec)}`,
     `newest by publish time: ${newest}`,
   ];
 };
@@ -70,7 +70,7 @@ const registryView = (pack: Packument, spec: string): string[] => {
 const pickView = (pack: Packument, spec: string): string[] => {
   const versions = pack.versions ?? {};
   const time = pack.time ?? {};
-  const v = versions[spec];
+  const v = Object.hasOwn(versions, spec) ? versions[spec] : undefined;
   const entry =
     v === undefined
       ? "absent"
@@ -82,7 +82,7 @@ const pickView = (pack: Packument, spec: string): string[] => {
           attestations: v.dist?.attestations !== undefined,
         });
   return [
-    `  versions: ${Object.keys(versions).length}, has versions[${spec}]: ${spec in versions}, has time[${spec}]: ${spec in time}`,
+    `  versions: ${Object.keys(versions).length}, has versions[${spec}]: ${Object.hasOwn(versions, spec)}, has time[${spec}]: ${Object.hasOwn(time, spec)}`,
     `  versions[${spec}]: ${entry}`,
   ];
 };
