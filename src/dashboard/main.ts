@@ -1,9 +1,11 @@
 // Entry point of the dashboard steps: `node src/dashboard/main.ts <step>`.
-// The workflow runs one step per section with `continue-on-error`, so a
+// The audit job runs `lockfile` and `audit` in the caller's checkout; the
+// update-issue job runs one step per section with `continue-on-error`, so a
 // failed step prints `::error::` and exits 1 while the others still run.
 
 import { error as annotate } from "../lib/actions.ts";
 import { Fail } from "../lib/env.ts";
+import { audit, lockfile } from "./audit.ts";
 import { catalog } from "./catalog.ts";
 import { gitleaks } from "./gitleaks.ts";
 import { issue } from "./issue.ts";
@@ -14,6 +16,8 @@ import { setup } from "./setup.ts";
 import { supplyChain } from "./supply-chain.ts";
 
 const steps: Record<string, () => Promise<void> | void> = {
+  lockfile,
+  audit,
   setup,
   security,
   catalog,

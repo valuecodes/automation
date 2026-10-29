@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Runs the steps of .github/workflows/maintenance-dashboard.yml here, in
 # order and with dry-run on, and prints the dashboard title and body: the
-# audit job's shell steps out of the workflow file, then the section scripts
-# in src/dashboard/ with the local Node.js. CI
-# runs the dashboard in dry-run mode against this repo only; this is the way
-# to see the body for any repo before a change is merged and re-pinned.
+# audit job's steps in the checkout, then the section steps, all from
+# src/dashboard/ with the local Node.js. CI runs the dashboard in dry-run
+# mode against this repo only; this is the way to see the body for any repo
+# before a change is merged and re-pinned.
 #
 #   scripts/dashboard-dry-run.sh [owner/repo [commit [checkout-dir]]]
 #
@@ -12,19 +12,18 @@
 # on GitHub, because the steps read files through the API; the checkout is
 # only used for the audit job (`pnpm audit` and the lockfile listing). The
 # inputs are fixed to their defaults (14 days, `.github/scripts/secrets-scan.sh`).
-# Needs gh (logged in), jq, yq, pnpm, curl and the Node.js in .nvmrc.
-# Talks to the real registries and osv.dev, never touches an issue. The body
-# lands in tmp/dashboard/<owner>-<repo>/dashboard.md (ignored by git) next to
-# the steps' work files, and is printed too. Like the workflow, every step runs
+# Needs gh (logged in), pnpm, curl and the Node.js in .nvmrc. Talks to the
+# real registries and osv.dev, never touches an issue. The body lands in
+# tmp/dashboard/<owner>-<repo>/dashboard.md (ignored by git) next to the
+# steps' work files, and is printed too. Like the workflow, every step runs
 # even when an earlier one failed; the exit code is 1 when any step failed.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-workflow="$root/.github/workflows/maintenance-dashboard.yml"
 checkout=${3:-$root}
 checkout=$(cd "$checkout" && pwd)
 
-for tool in gh jq yq pnpm curl node; do
+for tool in gh pnpm curl node; do
   if ! command -v "$tool" > /dev/null; then
     echo "::error::$tool is not installed; the workflow's steps need it." >&2
     exit 1
@@ -56,19 +55,6 @@ export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/dashboard.md"
 : > "$GITHUB_OUTPUT"
 : > "$GITHUB_STEP_SUMMARY"
 
-# The dedented script of the step with this name. The match depends on the
-# workflow's indentation (steps at six spaces, `run: |` at eight, the script
-# at ten), so a reformat of the workflow shows up here as "step not found".
-step() {
-  awk -v want="$1" '
-    index($0, "- name: " want) == 7 || index($0, "- name: \"" want "\"") == 7 { grab = 1; next }
-    grab && /^        run: \|/ { body = 1; next }
-    body && /^      - / { exit }
-    body && /^  [a-z]/ { exit }
-    body { sub(/^          /, ""); print }
-  ' "$workflow"
-}
-
 # Reports a step's exit code instead of stopping, like `continue-on-error`.
 # A failure is remembered for the final exit code.
 failed=0
@@ -79,37 +65,23 @@ report() {
   fi
 }
 
-# One shell step of the audit job, run in the checkout.
+# One step, run from the given directory: the audit job's in the checkout,
+# the update-issue job's anywhere.
 run_step() {
-  local name=$1
-  step "$name" > "$RUNNER_TEMP/step.sh"
-  if [[ ! -s $RUNNER_TEMP/step.sh ]]; then
-    echo "::error::Step not found in the workflow: $name" >&2
-    exit 1
-  fi
+  local name=$1 dir=$2
   echo "=== $name" >&2
   set +e
-  (cd "$checkout" && bash "$RUNNER_TEMP/step.sh") >&2
+  (cd "$dir" && node "$root/src/dashboard/main.ts" "$name") >&2
   report $?
   set -e
 }
 
-# One step of the update-issue job, which needs no checkout.
-run_script() {
-  echo "=== $1" >&2
-  set +e
-  node "$root/src/dashboard/main.ts" "$1" >&2
-  report $?
-  set -e
-}
-
-run_step "Check for a pnpm project"
+run_step lockfile "$checkout"
 if grep -q '^pnpm=true' "$GITHUB_OUTPUT"; then
-  run_step "List the locked packages"
-  run_step "Run pnpm audit"
+  run_step audit "$checkout"
 fi
 for name in setup security catalog supply-chain pnpm gitleaks node issue; do
-  run_script "$name"
+  run_step "$name" "$root"
 done
 
 echo >&2
