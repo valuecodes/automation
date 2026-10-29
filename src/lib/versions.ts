@@ -99,5 +99,18 @@ const newer = (
   };
 };
 
-export { EXACT, parse, compare, stamp, newer };
+/**
+ * The same answer without one of its versions, when the registry turned out
+ * not to serve it. The date goes with the version, so a remaining target
+ * never shows the dropped one's date.
+ */
+const dropVersion = (row: Newer, version: string): Newer => ({
+  ...row,
+  inMajor: row.inMajor === version ? null : row.inMajor,
+  inMajorDate: row.inMajor === version ? null : row.inMajorDate,
+  major: row.major === version ? null : row.major,
+  majorDate: row.major === version ? null : row.majorDate,
+});
+
+export { EXACT, parse, compare, stamp, newer, dropVersion };
 export type { Version, Packument, Newer };
