@@ -4,7 +4,7 @@
 // is the one the repo pinned before this update. This step runs caller
 // code's package manager in the caller's tree, so it has no token.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { editCatalog, parseCatalog } from "../lib/catalog.ts";
 import { Fail, env } from "../lib/env.ts";
 import { git, pnpm as runPnpm } from "../lib/exec.ts";
@@ -165,6 +165,7 @@ const resolve = async (): Promise<void> => {
   const ctx = updateContext();
   const meta = readMeta(ctx.out);
   const dir = env("CHECKOUT");
+  mkdirSync(ctx.npm, { recursive: true });
   const head = (await git(dir, "rev-parse", "HEAD")).stdout.trim();
   if (head !== meta.baseSha) {
     throw new Fail("The checkout is not the commit the files were read from.");
