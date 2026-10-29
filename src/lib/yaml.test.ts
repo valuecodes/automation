@@ -157,8 +157,52 @@ test("parseYaml reads a workspace file with comments, lists and quotes", () => {
   ]);
 });
 
+test("parseYaml reads literal and folded block scalars", () => {
+  const text = [
+    "packages:",
+    "  request@2.88.2:",
+    "    deprecated: >-",
+    "      request has been deprecated, see",
+    "      https://github.com/request/request/issues/3142",
+    "    hasBin: true",
+    "  other@1.0.0:",
+    "    deprecated: |",
+    "      line one # not a comment",
+    "",
+    "        indented",
+    "      last",
+    "",
+    "    note: >+",
+    "      kept",
+    "",
+    "    after: 1",
+    "- end",
+  ]
+    .join("\n")
+    .replace("\n- end", "");
+  assert.deepEqual(parseYaml(text), [
+    {
+      packages: {
+        "request@2.88.2": {
+          deprecated:
+            "request has been deprecated, see https://github.com/request/request/issues/3142",
+          hasBin: true,
+        },
+        "other@1.0.0": {
+          deprecated: "line one # not a comment\n\n  indented\nlast\n",
+          note: "kept\n\n",
+          after: 1,
+        },
+      },
+    },
+  ]);
+  assert.deepEqual(parseYaml("- |\n  a\n  b\n- x\n"), [["a\nb\n", "x"]]);
+  assert.deepEqual(parseYaml("a: >\n  one\n  two\n\n  three\nb: 2\n"), [
+    { a: "one two\nthree\n", b: 2 },
+  ]);
+});
+
 test("parseYaml refuses what it cannot read", () => {
-  assert.throws(() => parseYaml("a: |\n  text\n"), /unsupported/);
   assert.throws(() => parseYaml("a: &x 1\n"), /unsupported/);
   assert.throws(() => parseYaml("a:\n\tb: 1\n"), /tabs/);
   assert.throws(() => parseYaml("a: 1\n  b: 2\n"), /unexpected indentation/);
