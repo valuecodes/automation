@@ -281,25 +281,13 @@ jobs:
           fi
           cur=${BASH_REMATCH[1]}
           hashed=${BASH_REMATCH[2]}
-          curl -fsSL --compressed --retry 3 -H 'accept: application/json' -o "$RUNNER_TEMP/pnpm.json" https://registry.npmjs.org/pnpm
+          curl -fsSL --compressed --retry 3 -o "$RUNNER_TEMP/pnpm.json" https://registry.npmjs.org/pnpm
           newer=$(jq -c --arg name pnpm --arg cur "$cur" --argjson cutoff "$(< "$SRC/cutoff")" --argjson maxmajor null \
             -f "$SRC/newer.jq" "$RUNNER_TEMP/pnpm.json")
           version=$(jq -r '.inMajor // empty' <<<"$newer")
           major=$(jq -r '.major // empty' <<<"$newer")
           if [[ -z $version ]]; then
             printf 'current\npnpm %s is up to date%s\n' "$cur" "${major:+ on its major (pnpm $major stays on the dashboard)}" > "$OUT/state"
-            exit 0
-          fi
-          # The full packument is one cached object, and one has listed a
-          # version the registry never had, so the abbreviated packument, the
-          # document pnpm resolves from and another cached object, has to list
-          # the pick before anything, even the signal check, judges it. Not
-          # listed is inconclusive: `unclear` leaves an open PR alone. A
-          # failed request is an outage.
-          curl -fsSL --compressed --retry 3 --retry-connrefused -H 'accept: application/vnd.npm.install-v1+json' -o "$RUNNER_TEMP/pnpm.abbrev.json" https://registry.npmjs.org/pnpm
-          if ! jq -e --arg v "$version" '.versions | has($v)' "$RUNNER_TEMP/pnpm.abbrev.json" > /dev/null; then
-            echo "::warning::The full packument lists pnpm $version but the abbreviated one pnpm resolves from does not; nothing proposed this run."
-            printf 'unclear\nthe full packument lists pnpm %s but the one pnpm resolves from does not; nothing proposed this run\n' "$version" > "$OUT/state"
             exit 0
           fi
           if [[ -n $(jq -r --arg name pnpm --arg cur "$cur" --arg target "$version" -f "$SRC/signals.jq" "$RUNNER_TEMP/pnpm.json") ]]; then
@@ -462,9 +450,9 @@ jobs:
           cutoff=$(( $(date +%s) - age * 60 ))
 
           # Full packuments (they carry `time`), as in the dashboard. One line
-          # per download names the edge and the cached object it served, the
-          # evidence a stale packument leaves behind; the resolve step's
-          # diagnostics print it.
+          # per download names the edge and the cached object it served, so a
+          # wrong pick can be traced to what the registry answered; the
+          # resolve step's diagnostics print it again on failure.
           jq -r 'keys[]' "$work/catalog.json" | while IFS= read -r name; do
             enc=${name//\//%2F}
             printf 'url = "https://registry.npmjs.org/%s"\noutput = "%s/%s.json"\n' "$enc" "$work" "$enc"
@@ -475,8 +463,7 @@ jobs:
           # Each file must be the packument of the package it is named after,
           # or every pick below would read the wrong package's versions.
           while IFS= read -r name; do
-            enc=${name//\//%2F}
-            got=$(jq -r '.name // ""' "$work/$enc.json")
+            got=$(jq -r '.name // ""' "$work/${name//\//%2F}.json")
             if [[ $got != "$name" ]]; then
               echo "::error::The packument saved for $name is for '$got'."
               exit 1
@@ -485,10 +472,12 @@ jobs:
 
           : > "$work/kept.jsonl"
           : > "$work/flagged.md"
-          : > "$work/phantom.txt"
           majors=0
           jq -r 'to_entries[] | "\(.key)\t\(.value | tostring)"' "$work/catalog.json" | while IFS=$'\t' read -r name spec; do
-            if [[ ! $spec =~ ^([\^~]?)([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            # No backslash inside the brackets: bash would read `[\^~]` as the
+            # negated class `[^~]`, which once swallowed the first digit of
+            # `26.6.5` as the "prefix" and left `6.6.5` as the version.
+            if [[ ! $spec =~ ^([~^]?)([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
               continue
             fi
             prefix=${BASH_REMATCH[1]}
@@ -503,26 +492,11 @@ jobs:
             if [[ -z $target ]]; then
               continue
             fi
-            # What the pick rests on, in the log: a version the registry
-            # never had shows up here as an odd date, tarball or publisher.
-            jq -r --arg name "$name" --arg v "$target" '
-              "\($name): picked \($v) over \($ARGS.named.cur), published \(.time[$v] // "?"), tarball \(.versions[$v].dist.tarball // "?"), publisher \(.versions[$v]._npmUser.name // "?"), \(.versions | length) versions, latest \(."dist-tags".latest // "?")"
-            ' --arg cur "$cur" "$packument"
-            # The full packument is one cached object, and one has listed a
-            # version the registry never had, so the abbreviated packument,
-            # the document pnpm resolves from and another cached object, has
-            # to list the pick before anything, even the signal check, judges
-            # it. Not listed leaves the package out of this run, in the PR's
-            # "Left out" table. A failed request is an outage and fails the
-            # step.
-            curl -fsSL --compressed --retry 3 --retry-connrefused -H 'accept: application/vnd.npm.install-v1+json' -o "$work/${name//\//%2F}.abbrev.json" "https://registry.npmjs.org/${name//\//%2F}"
-            if ! jq -e --arg v "$target" '.versions | has($v)' "$work/${name//\//%2F}.abbrev.json" > /dev/null; then
-              echo "::warning::The full packument lists $name $target but the abbreviated one pnpm resolves from does not; left out. Download: $(grep -F "/${name//\//%2F} " "$work/packuments.log" || true)"
-              jq -nr --arg name "$name" --arg cur "$cur" --arg target "$target" \
-                '"| `\($name)` | \($cur) → \($target) | the full packument lists it, the one pnpm resolves from does not; the full one may be stale |"' >> "$work/flagged.md"
-              echo "$name $target" >> "$work/phantom.txt"
-              continue
-            fi
+            # What the pick rests on, in the log: a wrong current version or
+            # an odd publish date, tarball or publisher shows up here.
+            jq -r --arg name "$name" --arg v "$target" --arg cur "$cur" '
+              "\($name): picked \($v) over \($cur), published \(.time[$v] // "?"), tarball \(.versions[$v].dist.tarball // "?"), publisher \(.versions[$v]._npmUser.name // "?"), \(.versions | length) versions, latest \(."dist-tags".latest // "?")"
+            ' "$packument"
             flagged=$(jq -r --arg name "$name" --arg cur "$cur" --arg target "$target" -f "$SRC/signals.jq" "$packument")
             if [[ -n $flagged ]]; then
               echo "$flagged" >> "$work/flagged.md"
@@ -535,20 +509,7 @@ jobs:
           fi
           kept=$(wc -l < "$work/kept.jsonl")
           flagged=$(wc -l < "$work/flagged.md")
-          phantom=$(wc -l < "$work/phantom.txt")
           if (( kept == 0 )); then
-            # A version the registry did not serve is no evidence that the
-            # update is not due, so the result is inconclusive and the final
-            # step leaves an open PR alone instead of closing it.
-            if (( phantom > 0 )); then
-              read -r pname pversion < "$work/phantom.txt"
-              more=""
-              if (( phantom > 1 )); then
-                more=" and $(( phantom - 1 )) more"
-              fi
-              printf 'unclear\nthe full packument lists %s %s but the one pnpm resolves from does not%s; nothing proposed this run\n' "$pname" "$pversion" "$more" > "$OUT/state"
-              exit 0
-            fi
             if (( flagged > 0 )); then
               reason="$flagged catalog updates are held back by update signals, see the dashboard"
             else
@@ -639,6 +600,10 @@ jobs:
                   | ($l[$c:]) as $v
                   | ($v | index($u.current)) as $p
                   | if $p == null then error("\($key): \($u.current) is not on its catalog line") else . end
+                  # The whole value, not a part of it: `6.6.5` is inside
+                  # `26.6.5`, and replacing it there once produced `26.14.13`.
+                  | ($v[1:] | trim | sub("\\s*#.*$"; "") | trim | unq | sub("^[~^]"; "")) as $value
+                  | if $value != $u.current then error("\($key): the catalog line holds \($value), not \($u.current)") else . end
                   | .out += [$l[:$c] + $v[:$p] + $u.target + $v[$p + ($u.current | length):]]
                   | .done[$key] = true
                 end
@@ -735,7 +700,7 @@ jobs:
               enc=${name//\//%2F}
               {
                 echo "$name@$spec on registry.npmjs.org (not the caller's registry, if it uses another)"
-                if curl -fsS --compressed --connect-timeout 10 --max-time 60 -H 'accept: application/json' -D "$work/registry.headers" -o "$work/registry.json" "https://registry.npmjs.org/$enc"; then
+                if curl -fsS --compressed --connect-timeout 10 --max-time 60 -D "$work/registry.headers" -o "$work/registry.json" "https://registry.npmjs.org/$enc"; then
                   grep -iE '^(date|cf-cache-status|age|last-modified|etag|cf-ray):' "$work/registry.headers" || true
                   jq -r --arg v "$spec" '
                     "dist-tags: \(."dist-tags" | to_entries | map("\(.key)=\(.value)") | join(" "))",
@@ -746,19 +711,17 @@ jobs:
                 else
                   echo "the packument request failed"
                 fi
-                # What the pick step saw: its full and abbreviated packuments
-                # of this package are still on disk, so the entry it picked
-                # can be compared with what the registry says now.
-                for doc in "$work/$enc.json" "$work/$enc.abbrev.json"; do
-                  if [[ -f $doc ]]; then
-                    echo
-                    echo "the pick step's ${doc##*/}:"
-                    jq -r --arg v "$spec" '
-                      "  versions: \(.versions | length), has versions[\($v)]: \(.versions | has($v)), has time[\($v)]: \((.time // {}) | has($v))",
-                      "  versions[\($v)]: \(.versions[$v] | if . == null then "absent" else {time: $ARGS.named.t, tarball: .dist.tarball, integrity: .dist.integrity, publisher: ._npmUser, attestations: (.dist.attestations != null)} | tostring end)"
-                    ' --arg t "$(jq -r --arg v "$spec" '(.time // {})[$v] // "absent"' "$doc")" "$doc"
-                  fi
-                done
+                # What the pick step saw: its packument of this package is
+                # still on disk, so the entry it picked can be compared with
+                # what the registry says now.
+                if [[ -f $work/$enc.json ]]; then
+                  echo
+                  echo "the pick step's packument:"
+                  jq -r --arg v "$spec" --arg t "$(jq -r --arg v "$spec" '(.time // {})[$v] // "absent"' "$work/$enc.json")" '
+                    "  versions: \(.versions | length), has versions[\($v)]: \(.versions | has($v)), has time[\($v)]: \((.time // {}) | has($v))",
+                    "  versions[\($v)]: \(.versions[$v] | if . == null then "absent" else {time: $t, tarball: .dist.tarball, integrity: .dist.integrity, publisher: ._npmUser, attestations: (.dist.attestations != null)} | tostring end)"
+                  ' "$work/$enc.json"
+                fi
               } 2>&1 | section "Registry view of the failing package" || true
             else
               echo "pnpm named no package, or its name or spec did not validate" | section "Registry view of the failing package" || true
@@ -882,9 +845,9 @@ jobs:
             if (( flagged > 0 )); then
               echo "> [!WARNING]"
               if (( flagged == 1 )); then
-                echo "> 1 package was left out, see below."
+                echo "> 1 package was left out because of update signals, see below."
               else
-                echo "> $flagged packages were left out, see below."
+                echo "> $flagged packages were left out because of update signals, see below."
               fi
               echo
             fi
@@ -917,7 +880,7 @@ jobs:
               echo
               echo "### Left out"
               echo
-              echo "| Package | Update | Why |"
+              echo "| Package | Update | Signals |"
               echo "| --- | --- | --- |"
               cat "$work/flagged.md"
             fi
@@ -1020,14 +983,6 @@ jobs:
               all(.commits[]; .author.login == "github-actions[bot]" and (.commit.message | split("\n") | index($trailer) != null))
             ' "$RUNNER_TEMP/compare.json" > /dev/null
           }
-
-          # A version the packument listed but the registry did not serve is
-          # no evidence that the update is not due, so nothing is closed.
-          if [[ $state == unclear ]]; then
-            echo "**$label:** $reason." >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::$label: $reason; ${number:+#$number and }$branch are left as they are."
-            exit 0
-          fi
 
           if [[ $state != update ]]; then
             echo "**$label:** $reason." >> "$GITHUB_STEP_SUMMARY"

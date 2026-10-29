@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  confirm,
-  nodeMajor,
-  parseCatalog,
-  render,
-  tableRows,
-} from "./catalog.ts";
+import { nodeMajor, parseCatalog, render, tableRows } from "./catalog.ts";
 import type { Row } from "./catalog.ts";
 
 test("parseCatalog reads plain and quoted entries and stops at the block end", () => {
@@ -104,57 +98,4 @@ test("render says up to date, or counts outdated and unparsed entries", () => {
   );
   const warn = render([unparsed], 14, null, false);
   assert.equal(warn.status.state, "warn");
-});
-
-test("render names a version pnpm cannot resolve on both paths", () => {
-  const phantom = [{ name: "a|b", version: "9.9.9" }];
-  const ok = render([current], 14, null, false, phantom);
-  assert.deepEqual(ok.status, {
-    state: "warn",
-    text: "1 not resolvable",
-    details: "1 package, 1 listed but not resolvable",
-  });
-  assert.match(ok.markdown, /no confirmed update for 1 catalog package\./);
-  assert.doesNotMatch(ok.markdown, /up to date/);
-  assert.match(
-    ok.markdown,
-    /The full packument of `a\\\|b` lists 9\.9\.9, but the one pnpm resolves from does not; ignored\./,
-  );
-  const out = render(rows, 14, null, false, phantom);
-  assert.equal(
-    out.status.details,
-    "1 of 3 outdated, 1 not an exact version, 1 listed but not resolvable",
-  );
-  assert.match(out.markdown, /does not; ignored\.\n\n\| Package/);
-});
-
-test("confirm drops an unresolvable version with its date and keeps the rest", async () => {
-  const both: Row = {
-    name: "a",
-    current: "1.0.0",
-    inMajor: "1.2.0",
-    inMajorDate: "2026-01-02",
-    major: "2.0.0",
-    majorDate: "2026-02-02",
-  };
-  const asked: string[] = [];
-  const exists = (name: string, version: string): Promise<boolean> => {
-    asked.push(`${name}@${version}`);
-    return Promise.resolve(version !== "1.2.0");
-  };
-  const result = await confirm([both, current, unparsed], exists);
-  assert.deepEqual(asked, ["a@1.2.0", "a@2.0.0"]);
-  assert.deepEqual(result.phantom, [{ name: "a", version: "1.2.0" }]);
-  assert.deepEqual(result.rows, [
-    {
-      name: "a",
-      current: "1.0.0",
-      inMajor: null,
-      inMajorDate: null,
-      major: "2.0.0",
-      majorDate: "2026-02-02",
-    },
-    current,
-    unparsed,
-  ]);
 });
