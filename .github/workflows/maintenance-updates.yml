@@ -196,7 +196,8 @@ jobs:
           set -euo pipefail
           git -C .automation update-index --really-refresh -q >/dev/null || true
           head=$(git -C .automation rev-parse HEAD)
-          changed=$(git -C .automation status --porcelain --untracked-files=all)
+          # One line, since an annotation shows only the first.
+          changed=$(git -C .automation status --porcelain --untracked-files=all | tr '\n' ' ')
           if [[ $head != "$SHA" || -n $changed ]]; then
             echo "::error::The checkout of the update steps (.automation) changed after it was made (HEAD $head, pinned $SHA${changed:+, changed files: $changed}), so the steps that hold the token did not run."
             exit 1
