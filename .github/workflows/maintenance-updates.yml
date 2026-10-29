@@ -471,6 +471,17 @@ jobs:
           done > "$work/urls.txt"
           curl -fsSL --compressed --retry 3 --parallel --parallel-max 6 --config "$work/urls.txt" -H 'accept: application/json' \
             -w '%{url} %{http_code} cf-ray=%header{cf-ray} cf-cache-status=%header{cf-cache-status} age=%header{age} etag=%header{etag}\n' > "$work/packuments.log"
+          cat "$work/packuments.log"
+          # Each file must be the packument of the package it is named after,
+          # or every pick below would read the wrong package's versions.
+          while IFS= read -r name; do
+            enc=${name//\//%2F}
+            got=$(jq -r '.name // ""' "$work/$enc.json")
+            if [[ $got != "$name" ]]; then
+              echo "::error::The packument saved for $name is for '$got'."
+              exit 1
+            fi
+          done < <(jq -r 'keys[]' "$work/catalog.json")
 
           : > "$work/kept.jsonl"
           : > "$work/flagged.md"
@@ -492,6 +503,11 @@ jobs:
             if [[ -z $target ]]; then
               continue
             fi
+            # What the pick rests on, in the log: a version the registry
+            # never had shows up here as an odd date, tarball or publisher.
+            jq -r --arg name "$name" --arg v "$target" '
+              "\($name): picked \($v) over \($ARGS.named.cur), published \(.time[$v] // "?"), tarball \(.versions[$v].dist.tarball // "?"), publisher \(.versions[$v]._npmUser.name // "?"), \(.versions | length) versions, latest \(."dist-tags".latest // "?")"
+            ' --arg cur "$cur" "$packument"
             # The full packument is one cached object, and one has listed a
             # version the registry never had, so the abbreviated packument,
             # the document pnpm resolves from and another cached object, has
