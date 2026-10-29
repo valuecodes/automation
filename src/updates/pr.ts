@@ -58,7 +58,7 @@ const body = (title: string, text: string, input: BodyInput): Body => {
   let content = text;
   content +=
     input.ciWorkflow === ""
-      ? "\n\nThis PR was opened with `GITHUB_TOKEN`, so its `pull_request` workflows wait for approval: use **Approve workflows to run** in the PR, or set `ci-workflow` in the caller."
+      ? "\n\nGitHub holds `pull_request` runs on PRs opened with `GITHUB_TOKEN` until someone with write access approves them: use **Approve workflows to run** in this PR. To start CI without approval on later updates, set `ci-workflow` in the caller."
       : `\n\nCI runs through \`workflow_dispatch\` of \`${input.ciWorkflow}\`, so it starts without approval. GitHub holds this PR's \`pull_request\` runs for approval; you can leave them.`;
   if (input.dashboard !== null) {
     content += `\n\nDashboard: #${input.dashboard}`;

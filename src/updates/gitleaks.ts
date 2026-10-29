@@ -54,9 +54,9 @@ const render = (
   digest: boolean,
 ): Rendered => {
   const content = [
-    "| Check | Status | Details |",
-    "| --- | --- | --- |",
-    `| gitleaks | ⬆️ update | ${current} → ${version} (${date}) |`,
+    "| Package | Current | Update | Released |",
+    "| --- | --- | --- | --- |",
+    `| gitleaks | ${current} | ${version} | ${date} |`,
     "",
     `Release notes: [v${version}](https://github.com/gitleaks/gitleaks/releases/tag/v${version}).`,
   ];

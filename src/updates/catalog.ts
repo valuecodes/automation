@@ -139,8 +139,48 @@ const catalogTitle = (kept: Kept[]): string =>
 
 type Rendered = { content: string[]; summary: string[] };
 
-/** The PR body; the full list of new locked versions goes to the run summary,
- * the PR shows the first 100, so a large resolution cannot break the body. */
+/** The lockfile part of a PR body, shared by the pnpm and catalog kinds. The
+ * full list of new locked versions goes to the run summary and the PR shows
+ * the first 100, so a large resolution cannot break the body. `lead` says
+ * why the lockfile changed when the edited file does not make it obvious. */
+const renderLockfile = (
+  added: LockedPackage[],
+  runsUrl: string,
+  lead = "",
+): Rendered => {
+  const prefix = lead === "" ? "" : `${lead} `;
+  if (added.length === 0) {
+    return {
+      content: ["### Lockfile changes", "", `${prefix}No new locked versions.`],
+      summary: [],
+    };
+  }
+  const content = [
+    "### Lockfile changes",
+    "",
+    `${prefix}${added.length} new locked ${added.length === 1 ? "version" : "versions"}, all checked on osv.dev: none is in the OpenSSF malicious-packages database.`,
+    "",
+    "<details><summary>New locked versions</summary>",
+    "",
+    "| Package | Version |",
+    "| --- | --- |",
+    ...added.slice(0, 100).map((a) => `| \`${a.name}\` | ${a.version} |`),
+  ];
+  if (added.length > 100) {
+    content.push(
+      `| … ${added.length - 100} more, see [the latest run's summary](${runsUrl}) |`,
+    );
+  }
+  content.push("", "</details>");
+  const summary = [
+    "### All new locked versions",
+    "",
+    ...added.map((a) => `- \`${a.name}\` ${a.version}`),
+  ];
+  return { content, summary };
+};
+
+/** The PR body, with the lockfile part from `renderLockfile`. */
 const renderCatalog = (
   picks: Picks,
   added: LockedPackage[],
@@ -165,22 +205,9 @@ const renderCatalog = (
         `| \`${esc(k.name)}\` | ${k.prefix}${k.current} | ${k.prefix}${k.target} | ${k.date} |`,
     ),
     "",
-    "### Lockfile changes",
-    "",
-    `${added.length} new locked ${added.length === 1 ? "version" : "versions"}, all checked on osv.dev: none is in the OpenSSF malicious-packages database.`,
-    "",
-    "<details><summary>New locked versions</summary>",
-    "",
-    "| Package | Version |",
-    "| --- | --- |",
-    ...added.slice(0, 100).map((a) => `| \`${a.name}\` | ${a.version} |`),
   );
-  if (added.length > 100) {
-    content.push(
-      `| … ${added.length - 100} more, see [the latest run's summary](${runsUrl}) |`,
-    );
-  }
-  content.push("", "</details>");
+  const lockfile = renderLockfile(added, runsUrl);
+  content.push(...lockfile.content);
   if (flagged > 0) {
     content.push(
       "",
@@ -191,12 +218,7 @@ const renderCatalog = (
       ...picks.flagged,
     );
   }
-  const summary = [
-    "### All new locked versions",
-    "",
-    ...added.map((a) => `- \`${a.name}\` ${a.version}`),
-  ];
-  return { content, summary };
+  return { content, summary: lockfile.summary };
 };
 
 const readPicks = (npm: string): Picks => {
@@ -282,6 +304,7 @@ export {
   pick,
   currentReason,
   catalogTitle,
+  renderLockfile,
   renderCatalog,
   readPicks,
   catalog,

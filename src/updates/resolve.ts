@@ -18,7 +18,12 @@ import {
 import type { LockedPackage } from "../lib/lockfile.ts";
 import { byCodePoint } from "../lib/markdown.ts";
 import { asRecord, parseYaml } from "../lib/yaml.ts";
-import { catalogTitle, readPicks, renderCatalog } from "./catalog.ts";
+import {
+  catalogTitle,
+  readPicks,
+  renderCatalog,
+  renderLockfile,
+} from "./catalog.ts";
 import type { Picks } from "./catalog.ts";
 import { readMeta, updateContext } from "./context.ts";
 import type { UpdateContext } from "./context.ts";
@@ -256,10 +261,15 @@ const resolve = async (): Promise<void> => {
     }
     appendQueries(ctx.out, added);
     addFile(ctx.out, "pnpm-lock.yaml", before, after);
-    appendContent(ctx.out, [
-      "",
-      `\`pnpm-lock.yaml\` pins pnpm itself, so it is resolved again: ${added.length} new locked versions of pnpm's own packages, all checked on osv.dev.`,
-    ]);
+    const lockfile = renderLockfile(
+      added,
+      ctx.runsUrl,
+      "`pnpm-lock.yaml` also locks pnpm and its dependencies, so they move with it.",
+    );
+    if (lockfile.summary.length > 0) {
+      writeSummary(ctx.out, lockfile.summary);
+    }
+    appendContent(ctx.out, ["", ...lockfile.content]);
     return;
   }
 

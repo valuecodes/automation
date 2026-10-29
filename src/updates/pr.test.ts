@@ -51,7 +51,7 @@ test("body adds the notes and a marker that ignores the date", () => {
     ciWorkflow: "",
     dashboard: null,
   });
-  assert.match(plain.content, /Approve workflows to run/);
+  assert.match(plain.content, /approves them: use \*\*Approve workflows/);
   assert.doesNotMatch(plain.content, /Dashboard:/);
   assert.notEqual(plain.marker, a.marker);
 });
