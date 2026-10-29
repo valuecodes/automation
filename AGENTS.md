@@ -22,6 +22,7 @@ Reusable GitHub Actions workflows that other repos call with
 | `src/updates/`                                | The update PRs' steps, one TypeScript module per step      |
 | `src/lib/`                                    | Shared: GitHub, registry and YAML reading, version rules   |
 | `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions            |
+| `.github/scripts/secrets-scan.sh`             | gitleaks over the git history, with the pinned version     |
 | `scripts/dashboard-dry-run.sh`                | Runs the dashboard's steps locally, prints the body        |
 | `scripts/updates-dry-run.sh`                  | Runs the update steps locally, prints the planned PRs      |
 
@@ -43,6 +44,7 @@ pnpm typecheck                   # tsc --noEmit over src/
 pnpm test                        # node --test over src/**/*.test.ts
 pnpm format                      # oxfmt, writes in place
 pnpm format:check                # oxfmt --check (no writes)
+pnpm secrets:scan                # gitleaks over the git history; `--staged` for the index
 scripts/dashboard-dry-run.sh     # The dashboard body for this repo, or `owner/repo sha dir`
 scripts/updates-dry-run.sh       # The planned update PRs for this repo, or `owner/repo [kind...]`
 ```
@@ -81,15 +83,21 @@ tests, so an export nothing imports is a finding: drop the `export`, don't add a
 
 Git hooks live in `.githooks/` as plain shell scripts, enabled by `pnpm install` through the
 root `prepare` script (`git config core.hooksPath .githooks`, so it covers every worktree).
-`pre-commit` runs `format:check` and `lint`, `pre-push` runs `typecheck`, `test` and `knip`;
-CI runs all of them again. Never bypass them with `--no-verify`. Nothing formats on edit: run
-`pnpm format` yourself before committing.
+`pre-commit` runs `format:check`, `lint` and `secrets:scan --staged`, `pre-push` runs
+`typecheck`, `test` and `knip`; CI runs all of them again. Never bypass them with
+`--no-verify`. Nothing formats on edit: run `pnpm format` yourself before committing.
 
-actionlint (with shellcheck over the `run:` scripts), shellcheck over `scripts/` and zizmor
-run in CI only; they are not npm packages. CI (`.github/workflows/ci.yml`) runs them all on
-PRs and on push to `main`, with `lint`, `knip`, `typecheck` and `test`, the two linters through
-`workflow-lint.yml`, and calls `maintenance-dashboard.yml` with `dry-run: true`; its `ci` job
-is the check to require on `main`.
+`.github/scripts/secrets-scan.sh` runs a local gitleaks (v8.19+) or else the pinned Docker
+image, and exits 2 when it has neither, so the pre-commit hook fails closed. It is also the
+file both maintenance workflows read by default (`gitleaks-script`), so the CI dry runs check
+the gitleaks section and update against this repo's own pin.
+
+actionlint (with shellcheck over the `run:` scripts), shellcheck over `scripts/` and
+`.github/scripts/` and zizmor run in CI only; they are not npm packages. gitleaks runs in CI
+through the same script, in the `secrets-scan` job. CI (`.github/workflows/ci.yml`) runs them
+all on PRs and on push to `main`, with `lint`, `knip`, `typecheck` and `test`, the two linters
+through `workflow-lint.yml`, and calls `maintenance-dashboard.yml` with `dry-run: true`; its
+`ci` job is the check to require on `main`.
 
 ---
 
