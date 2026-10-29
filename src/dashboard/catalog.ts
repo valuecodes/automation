@@ -6,15 +6,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Fail, context } from "../lib/env.ts";
 import { warning } from "../lib/actions.ts";
 import { esc, plural } from "../lib/markdown.ts";
-import {
-  NAME,
-  downloadPackuments,
-  readPackument,
-  resolvable,
-} from "../lib/npm.ts";
+import { NAME, downloadPackuments, readPackument } from "../lib/npm.ts";
 import { writeSection } from "../lib/sections.ts";
 import type { Status } from "../lib/sections.ts";
-import { EXACT, dropVersion, newer } from "../lib/versions.ts";
+import { EXACT, newer } from "../lib/versions.ts";
 import type { Newer } from "../lib/versions.ts";
 import { FILES, readCutoff, requireSetup } from "./setup.ts";
 
@@ -103,44 +98,6 @@ const tableRows = (rows: Row[]): string[] => {
     });
 };
 
-/** A version the full packument listed but pnpm cannot resolve. */
-type Phantom = { name: string; version: string };
-
-/**
- * Every picked version against the abbreviated packument, the document pnpm
- * resolves from. A version missing there leaves its row, with its date, and
- * is reported instead of listed, so the issue and the supply chain step
- * never name it.
- */
-const confirm = async (
-  rows: Row[],
-  exists: (name: string, version: string) => Promise<boolean> = resolvable,
-): Promise<{ rows: Row[]; phantom: Phantom[] }> => {
-  const picks: Phantom[] = [];
-  for (const row of rows) {
-    if (!isUnparsed(row)) {
-      for (const version of [row.inMajor, row.major]) {
-        if (version !== null) {
-          picks.push({ name: row.name, version });
-        }
-      }
-    }
-  }
-  const served = await Promise.all(picks.map((p) => exists(p.name, p.version)));
-  const phantom = picks.filter((_, i) => served[i] === false);
-  const cleaned = rows.map((row) =>
-    isUnparsed(row)
-      ? row
-      : phantom
-          .filter((p) => p.name === row.name)
-          .reduce((r, p) => dropVersion(r, p.version), row),
-  );
-  return { rows: cleaned, phantom };
-};
-
-const phantomLine = (p: Phantom): string =>
-  `The full packument of \`${esc(p.name)}\` lists ${p.version}, but the one pnpm resolves from does not; ignored.`;
-
 type Rendered = {
   markdown: string;
   status: Status;
@@ -152,31 +109,19 @@ const render = (
   minAgeDays: number,
   major: number | null,
   capsTypesNode: boolean,
-  phantom: Phantom[] = [],
 ): Rendered => {
   const total = rows.length;
   const outdated = rows.filter(hasUpdate).length;
   const majors = rows.filter((r) => !isUnparsed(r) && r.major !== null).length;
   const unparsed = rows.filter(isUnparsed).length;
   if (outdated + unparsed === 0) {
-    const notes = phantom.map((p) => `${phantomLine(p)}\n`).join("");
     return {
-      markdown:
-        phantom.length === 0
-          ? `**Dependencies:** all ${total} catalog packages are up to date.\n`
-          : `**Dependencies:** no confirmed update for ${plural(total, "catalog package")}.\n${notes}`,
-      status:
-        phantom.length === 0
-          ? {
-              state: "ok",
-              text: "up to date",
-              details: plural(total, "package"),
-            }
-          : {
-              state: "warn",
-              text: `${phantom.length} not resolvable`,
-              details: `${plural(total, "package")}, ${phantom.length} listed but not resolvable`,
-            },
+      markdown: `**Dependencies:** all ${total} catalog packages are up to date.\n`,
+      status: {
+        state: "ok",
+        text: "up to date",
+        details: plural(total, "package"),
+      },
       rows: null,
     };
   }
@@ -186,9 +131,6 @@ const render = (
   }
   if (unparsed > 0) {
     details.push(`${unparsed} not an exact version`);
-  }
-  if (phantom.length > 0) {
-    details.push(`${phantom.length} listed but not resolvable`);
   }
   const lines = [
     "### Dependencies (`catalog:` in `pnpm-workspace.yaml`)",
@@ -208,7 +150,6 @@ const render = (
   if (major !== null && capsTypesNode) {
     lines.push(`\`@types/node\` is capped at the \`.nvmrc\` major (${major}).`);
   }
-  lines.push(...phantom.map(phantomLine));
   lines.push("");
   if (majors > 0) {
     lines.push(
@@ -228,10 +169,7 @@ const render = (
         }
       : {
           state: "warn",
-          text:
-            unparsed > 0
-              ? `${unparsed} not an exact version`
-              : `${phantom.length} not resolvable`,
+          text: `${unparsed} not an exact version`,
           details: details.join(", "),
         };
   return { markdown: `${lines.join("\n")}\n`, status, rows: tableRows(rows) };
@@ -286,7 +224,7 @@ const catalog = async (): Promise<void> => {
     entries.map(([name]) => name),
   );
   const cutoff = readCutoff(ctx.src);
-  const picked: Row[] = entries.map(([name, spec]) => {
+  const rows: Row[] = entries.map(([name, spec]) => {
     const current = spec.replace(/^[\^~]/, "");
     if (!EXACT.test(current)) {
       return { name, current: spec, unparsed: true };
@@ -299,21 +237,9 @@ const catalog = async (): Promise<void> => {
       name === "@types/node" ? major : null,
     );
   });
-  const { rows, phantom } = await confirm(picked);
-  for (const p of phantom) {
-    warning(
-      `The full packument of ${p.name} lists ${p.version}, but the abbreviated one pnpm resolves from does not; ignored. The download log above names the edge and object that served the full packument.`,
-    );
-  }
   // The supply chain step reuses the rows and the packuments.
   writeFileSync(`${ctx.npm}/rows.json`, JSON.stringify(rows));
-  const rendered = render(
-    rows,
-    ctx.minAgeDays,
-    major,
-    all.has("@types/node"),
-    phantom,
-  );
+  const rendered = render(rows, ctx.minAgeDays, major, all.has("@types/node"));
   if (rendered.rows !== null) {
     writeFileSync(
       `${ctx.sections}/${ID}.rows`,
@@ -323,14 +249,5 @@ const catalog = async (): Promise<void> => {
   writeSection(ctx.sections, ID, rendered.markdown, rendered.status);
 };
 
-export {
-  ID,
-  parseCatalog,
-  nodeMajor,
-  isUnparsed,
-  tableRows,
-  confirm,
-  render,
-  catalog,
-};
+export { ID, parseCatalog, nodeMajor, isUnparsed, tableRows, render, catalog };
 export type { Row };

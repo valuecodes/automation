@@ -32,9 +32,6 @@ changes code; for PRs, add [`maintenance-updates.yml`](#maintenance-updatesyml) 
 - Each run rebuilds the body and edits the issue only when it changed. A closed issue is
   recreated. A missing source file shows "not applicable"; a broken check shows "check failed"
   and makes the run red.
-- Every version listed is confirmed against the abbreviated packument, the document pnpm
-  resolves from. One the full packument lists but that document does not is named in the
-  section and ignored.
 - Only `GITHUB_TOKEN`: the `audit` job runs `pnpm audit` from the lockfile without installing
   or running repo code, and the files are read through the REST API.
 - The sections are built by TypeScript in [`src/dashboard/`](src/dashboard/). The
@@ -134,10 +131,6 @@ Supply chain guards:
   any lockfile change beyond pnpm's own entries stops the run.
 - Every version an update adds is looked up on osv.dev. A malicious hit opens no PR, closes the
   open one and makes the run red.
-- Every version an update proposes is confirmed against the abbreviated packument, the
-  document pnpm resolves from. One the full packument lists but that document does not is
-  left out and named in the PR; when that leaves nothing to propose, the run warns and leaves
-  an open PR as it is.
 - A package with an update signal is left out and listed in the PR. Nothing auto-merges.
 
 CI: on a PR opened with `GITHUB_TOKEN`, `pull_request` workflows wait until someone with write
