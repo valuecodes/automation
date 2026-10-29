@@ -34,6 +34,12 @@ changes code; for PRs, add [`maintenance-updates.yml`](#maintenance-updatesyml) 
   and makes the run red.
 - Only `GITHUB_TOKEN`: the `audit` job runs `pnpm audit` from the lockfile without installing
   or running repo code, and the files are read through the REST API.
+- What leaves the repo: the names and exact versions of the locked packages and catalog
+  entries go to osv.dev and the npm registry (one packument request per catalog entry), and
+  `pnpm audit` sends the dependency set to the registry in the caller's `.npmrc`. Nothing else
+  leaves; the issue stays in the repo. Trigger the caller on `schedule` and `workflow_dispatch`
+  only: the `audit` job checks out the commit the caller ran on, so a `pull_request` trigger
+  would run `pnpm audit` on a fork's lockfile.
 - The steps are TypeScript in [`src/dashboard/`](src/dashboard/). Both jobs check this repo
   out at the commit you pinned and run them with Node.js; nothing is installed from npm.
 
@@ -141,6 +147,26 @@ access approves them in the PR. To run CI without that click, set `ci-workflow` 
 with `on: workflow_dispatch:`, and the run starts it on each pushed branch. The PR then also
 shows the `pull_request` runs waiting for approval; you can leave them. Keep that CI free of
 secrets, since it runs the new versions.
+
+### Security
+
+- The workflow sees no caller secrets. It declares none, and `secrets: inherit` is not
+  needed. The caller's `GITHUB_TOKEN` is the only credential; it is present only on the steps
+  that call the API, and the step that runs pnpm in the caller's checkout has none.
+- With the four permissions, the token can push to `maintenance-updates/*` branches, open,
+  edit and close those PRs, and start `ci-workflow` by `workflow_dispatch`. It cannot change
+  `.github/workflows/` and cannot bypass branch protection.
+- A run on an update branch gets whatever secrets its workflow can reach: the dispatched
+  `ci-workflow`, and any `pull_request` run someone approves. So keep deploy credentials in a
+  GitHub environment whose deployment branch policy allows only the default branch or tags;
+  make OIDC trust conditions, such as Google Cloud Workload Identity Federation, check the ref
+  or the environment and not only the repository; and keep `ci-workflow` free of deploy
+  secrets and deploy steps.
+- Trigger the caller on `schedule` and `workflow_dispatch` only. Do not add `pull_request`.
+- After the lockfile resolve, a step checks that the scripts checkout is still the pinned
+  commit before the steps that hold the token run. That is a sanity check, not a boundary:
+  anyone who can run code in the caller's checkout already has commit access to its default
+  branch.
 
 To see the PRs a repo would get, run `scripts/updates-dry-run.sh owner/repo [kind...]`.
 
