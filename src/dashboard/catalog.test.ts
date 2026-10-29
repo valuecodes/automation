@@ -114,7 +114,8 @@ test("render names a version the registry does not serve on both paths", () => {
     text: "1 not served",
     details: "1 package, 1 not served by the registry",
   });
-  assert.match(ok.markdown, /all 1 catalog packages are up to date\./);
+  assert.match(ok.markdown, /no confirmed update for 1 catalog package\./);
+  assert.doesNotMatch(ok.markdown, /up to date/);
   assert.match(
     ok.markdown,
     /The registry lists `a\\\|b` 9\.9\.9 but does not serve it; ignored\./,
