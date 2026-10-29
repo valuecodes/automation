@@ -12,10 +12,10 @@
 # on GitHub, because the steps read files through the API; the checkout is
 # only used for the audit job (`pnpm audit` and the lockfile listing). The
 # inputs are fixed to their defaults (14 days, `.github/scripts/secrets-scan.sh`).
-# Needs gh (logged in), jq, yq, pnpm and curl; the runner ships all of them.
+# Needs gh (logged in), jq, yq, pnpm, curl and the Node.js in .nvmrc.
 # Talks to the real registries and osv.dev, never touches an issue. The body
 # lands in tmp/dashboard/<owner>-<repo>/dashboard.md (ignored by git) next to
-# the steps' work files, and is printed too. It needs the Node.js in .nvmrc. Like the workflow, every step runs
+# the steps' work files, and is printed too. Like the workflow, every step runs
 # even when an earlier one failed; the exit code is 1 when any step failed.
 set -euo pipefail
 

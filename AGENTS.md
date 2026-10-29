@@ -11,18 +11,18 @@ Guidelines for AI agents and contributors working in this repo.
 Reusable GitHub Actions workflows that other repos call with
 `uses: valuecodes/automation/.github/workflows/<file>@<full-commit-sha>`.
 
-| Path                                          | What                                                     |
-| --------------------------------------------- | -------------------------------------------------------- |
-| `.github/workflows/maintenance-dashboard.yml` | Reusable: keeps the **Maintenance dashboard** issue      |
-| `.github/workflows/maintenance-updates.yml`   | Reusable: one update PR per kind (Node.js, pnpm, …)      |
-| `.github/workflows/workflow-lint.yml`         | Reusable: actionlint and zizmor over workflow files      |
+| Path                                          | What                                                       |
+| --------------------------------------------- | ---------------------------------------------------------- |
+| `.github/workflows/maintenance-dashboard.yml` | Reusable: keeps the **Maintenance dashboard** issue        |
+| `.github/workflows/maintenance-updates.yml`   | Reusable: one update PR per kind (Node.js, pnpm, …)        |
+| `.github/workflows/workflow-lint.yml`         | Reusable: actionlint and zizmor over workflow files        |
 | `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, oxlint, tsc, tests, knip, reusables |
-| `.github/actions/setup/`                      | Composite setup action: pnpm, Node.js, frozen install    |
-| `src/dashboard/`                              | The dashboard's steps, one TypeScript module per step    |
-| `src/lib/`                                    | Shared: GitHub and registry calls, versions, sections    |
-| `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions          |
-| `scripts/dashboard-dry-run.sh`                | Runs the dashboard's steps locally, prints the body      |
-| `scripts/updates-dry-run.sh`                  | Runs the update steps locally, prints the planned PRs    |
+| `.github/actions/setup/`                      | Composite setup action: pnpm, Node.js, frozen install      |
+| `src/dashboard/`                              | The dashboard's steps, one TypeScript module per step      |
+| `src/lib/`                                    | Shared: GitHub and registry calls, versions, sections      |
+| `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions            |
+| `scripts/dashboard-dry-run.sh`                | Runs the dashboard's steps locally, prints the body        |
+| `scripts/updates-dry-run.sh`                  | Runs the update steps locally, prints the planned PRs      |
 
 `README.md` is the user-facing doc for each reusable workflow: what it does, a flowchart of
 how a run decides, and the caller snippet. Keep it in step with the workflow.
