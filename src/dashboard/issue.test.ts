@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { Api } from "../lib/github.ts";
+import { captureLog } from "../lib/capture-log.ts";
 import { HttpError } from "../lib/http.ts";
 import {
   build,
@@ -131,7 +132,8 @@ test("content cuts the catalog rows until the body fits", () => {
   assert.match(fitted, /more, see \[the latest run's summary\]/);
 });
 
-test("readSections treats a missing section or status as a failed check", () => {
+test("readSections treats a missing section or status as a failed check", (t) => {
+  const out = captureLog(t);
   const dir = mkdtempSync(join(tmpdir(), "sections-"));
   writeFileSync(join(dir, "10-security.md"), "**Security:** fine\n");
   writeFileSync(
@@ -155,6 +157,12 @@ test("readSections treats a missing section or status as a failed check", () => 
     sections[2]?.markdown,
     "**catalog:** check failed, see [the latest run](https://runs).\n",
   );
+  assert.deepEqual(out, [
+    "::error::The Supply chain check failed.",
+    "::error::The Dependencies check failed.",
+    "::error::The pnpm check failed.",
+    "::error::The Node.js check failed.",
+  ]);
 });
 
 test("footer and unchanged agree on the marker", () => {
@@ -221,7 +229,8 @@ const fakeApi = (
   return { api, calls };
 };
 
-test("publish creates, edits or leaves the issue", async () => {
+test("publish creates, edits or leaves the issue", async (t) => {
+  const out = captureLog(t);
   const body = footer("content", "2026-10-29", runs, "note");
   const logs: string[] = [];
   const log = (l: string): void => {
@@ -246,6 +255,9 @@ test("publish creates, edits or leaves the issue", async () => {
   await publish(same.api, "o/r", "t", "content", body, "note", log);
   assert.equal(same.calls.at(-1), "GET repos/o/r/issues/3");
   assert.equal(logs.at(-1), "Issue #3 is unchanged.");
+  assert.deepEqual(out, [
+    "::warning::Several open issues carry the maintenance-dashboard label; editing #3 and leaving the rest.",
+  ]);
   const stale = fakeApi([{ number: 3, title: "old", body }]);
   await publish(stale.api, "o/r", "t", "content", body, "note", log);
   assert.equal(stale.calls.at(-1), "PATCH repos/o/r/issues/3");

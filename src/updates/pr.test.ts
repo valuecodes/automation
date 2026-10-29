@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import type { Api } from "../lib/github.ts";
+import { captureLog } from "../lib/capture-log.ts";
 import { HttpError } from "../lib/http.ts";
 import { modeOk } from "./commit.ts";
 import type { Meta, UpdateContext } from "./context.ts";
@@ -305,7 +306,8 @@ test("publish leaves an unchanged PR alone and edits a changed one", async () =>
   assert.ok(fork.calls.includes("POST repos/o/r/pulls"));
 });
 
-test("publish stops for someone else's commits, a moved branch or a closed PR", async () => {
+test("publish stops for someone else's commits, a moved branch or a closed PR", async (t) => {
+  const out = captureLog(t);
   const other = await run({ tip: "tip", ours: false }, false);
   assert.deepEqual(
     other.calls.filter((c) => !c.startsWith("GET")),
@@ -341,6 +343,7 @@ test("publish stops for someone else's commits, a moved branch or a closed PR", 
   assert.deepEqual(closed.logs, [
     "A closed PR already proposed this exact update; not reopening it.",
   ]);
+  assert.match(out.join(), /not made by this workflow.*moved while this run/);
 });
 
 test("a dry run writes the PR and its diff to the summary only", async () => {
@@ -358,7 +361,8 @@ test("a dry run writes the PR and its diff to the summary only", async () => {
   assert.match(summary, /--- a\/\.github\/scripts\/scan\.sh\n/);
 });
 
-test("when nothing is due, this workflow's PR is closed and its branch deleted", async () => {
+test("when nothing is due, this workflow's PR is closed and its branch deleted", async (t) => {
+  captureLog(t);
   const pr: Pull = {
     number: 4,
     user: { login: BOT },
