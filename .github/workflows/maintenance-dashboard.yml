@@ -43,44 +43,46 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Check for a pnpm project
+      # Only this workflow file reaches the runner, so the steps are checked
+      # out from this repo at the commit the caller pinned, which
+      # `job.workflow_sha` names (see the other job). The caller's checkout
+      # above is left in place: this one lands in a subdirectory.
+      - name: Find the commit of this workflow
+        id: self
+        env:
+          JOB: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          sha=$(jq -r '.workflow_sha // ""' <<<"$JOB")
+          if [[ ! $sha =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::job.workflow_sha is not a commit SHA (got '$sha'), so the dashboard scripts cannot be checked out."
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the dashboard scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: valuecodes/automation
+          ref: ${{ steps.self.outputs.sha }}
+          path: .automation
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .automation/.nvmrc
+
+      # Is this a pnpm project, and every registry package in its lockfile,
+      # for the osv.dev check in the other job. Git and tarball entries have
+      # no registry version and are only counted, so the section can say how
+      # many were not checked.
+      - name: List the locked packages
         id: detect
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/audit"
-          if [[ ! -f pnpm-lock.yaml ]]; then
-            echo "skipped: no pnpm-lock.yaml" > "$RUNNER_TEMP/audit/status"
-          elif [[ ! -f package.json ]] || ! jq -e '.packageManager // "" | test("^pnpm@")' package.json > /dev/null; then
-            echo "skipped: package.json has no pnpm packageManager" > "$RUNNER_TEMP/audit/status"
-          else
-            echo "pnpm=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Every registry package in the lockfile, for the osv.dev check in the
-      # other job. Git and tarball entries have no registry version and are only
-      # counted, so the section can say how many were not checked.
-      - name: List the locked packages
-        if: steps.detect.outputs.pnpm == 'true'
-        run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/audit"
-          # pnpm 12 writes several YAML documents (the package manager's own
-          # dependencies, then the project), so `ea` reads them all.
-          yq ea -o=json '[.] | {"version": .[0].lockfileVersion, "keys": [.[] | (.packages // {}) | keys | .[]]}' pnpm-lock.yaml > "$out/lockfile.json"
-          version=$(jq -r '.version | tostring' "$out/lockfile.json")
-          if [[ ! $version =~ ^[69]\.[0-9]+$ ]]; then
-            echo "lockfileVersion $version is not supported" > "$out/packages.status"
-            exit 0
-          fi
-          # v6 keys are `/name@1.2.3`, v9 keys `name@1.2.3(peer@x)`.
-          jq '
-            [ .keys[]
-              | ltrimstr("/") | sub("\\(.*$"; "") | . as $key
-              | ([capture("^(?<name>.+)@(?<version>[^@]+)$")][0] // {name: "", version: ""})
-              | if (.name | test("^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$"))
-                   and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$"))
-                then {name, version} else {skipped: $key} end
-            ] | unique' "$out/lockfile.json" > "$out/packages.json"
+          node .automation/src/dashboard/main.ts lockfile
 
       - name: Set up pnpm
         if: steps.detect.outputs.pnpm == 'true'
@@ -90,19 +92,7 @@ jobs:
         if: steps.detect.outputs.pnpm == 'true'
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/audit"
-          # Exit 1 with valid JSON means findings; anything else is a failed audit.
-          set +e
-          pnpm audit --json --ignore-pnpmfile > "$out/audit.json" 2> "$out/stderr"
-          code=$?
-          set -e
-          if [[ $code -gt 1 ]] || ! jq -e 'has("advisories")' "$out/audit.json" > /dev/null 2>&1; then
-            echo "failed: pnpm audit exited with $code" > "$out/status"
-            echo "::warning::pnpm audit failed (exit $code)."
-            cat "$out/stderr"
-          else
-            echo ok > "$out/status"
-          fi
+          node .automation/src/dashboard/main.ts audit
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

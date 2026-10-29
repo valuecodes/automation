@@ -19,7 +19,8 @@ Reusable GitHub Actions workflows that other repos call with
 | `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, oxlint, tsc, tests, knip, reusables |
 | `.github/actions/setup/`                      | Composite setup action: pnpm, Node.js, frozen install      |
 | `src/dashboard/`                              | The dashboard's steps, one TypeScript module per step      |
-| `src/lib/`                                    | Shared: GitHub and registry calls, versions, sections      |
+| `src/updates/`                                | The update PRs' steps, one TypeScript module per step      |
+| `src/lib/`                                    | Shared: GitHub, registry and YAML reading, version rules   |
 | `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions            |
 | `scripts/dashboard-dry-run.sh`                | Runs the dashboard's steps locally, prints the body        |
 | `scripts/updates-dry-run.sh`                  | Runs the update steps locally, prints the planned PRs      |
@@ -48,30 +49,34 @@ scripts/updates-dry-run.sh       # The planned update PRs for this repo, or `own
 
 `scripts/updates-dry-run.sh` does the same for `maintenance-updates.yml`: it runs each kind's
 steps against the head of the repo's default branch on GitHub, with dry-run on (nothing pushed,
-no PR touched), and prints the PR each kind would open or why it opens none. For the catalog
-kind it fetches that commit into `tmp/updates/` and resolves the lockfile with the local pnpm.
+no PR touched), and prints the PR each kind would open or why it opens none. For the pnpm and
+catalog kinds it fetches that commit into `tmp/updates/` and resolves the lockfile with the
+local pnpm.
 
 The dashboard workflow only writes issues inside caller repos; CI runs it against this repo
 in dry-run mode. Run `scripts/dashboard-dry-run.sh` after changing it to see the result
-before pushing, or to see it for another repo: it runs the audit job's `run:` steps and then
-the section scripts in order with dry-run on (real registries and osv.dev, no issue touched)
-and prints the title and body, also saved under `tmp/dashboard/` (ignored). The inputs are
-fixed to their defaults, and the script exits 1 when a step failed. It needs gh, jq, yq, pnpm,
-curl and the Node.js in `.nvmrc`, and the commit must exist on GitHub.
+before pushing, or to see it for another repo: it runs the audit job's steps in the checkout
+and then the section steps in order with dry-run on (real registries and osv.dev, no issue
+touched) and prints the title and body, also saved under `tmp/dashboard/` (ignored). The
+inputs are fixed to their defaults, and the script exits 1 when a step failed. It needs gh,
+pnpm, curl and the Node.js in `.nvmrc`, and the commit must exist on GitHub.
 
-The dashboard's logic lives in `src/dashboard/` (one module per step, `main.ts` dispatches)
-and `src/lib/`. Node.js runs the `.ts` files as they are, with its built-in type stripping, so
-only erasable syntax is allowed (`erasableSyntaxOnly` in `tsconfig.json`), imports name the
-`.ts` extension, and there are no runtime npm packages: `fetch`, `node:fs` and friends do the
-work. Keep the pure parts (parsing, rendering, deciding) separate from the I/O so they can be
-unit-tested from fixtures in `*.test.ts` next to the module. The update workflow's steps are
-still inline shell; they move to `src/updates/` in a later change.
+Both workflows' logic lives in `src/dashboard/` and `src/updates/` (one module per step,
+`main.ts` dispatches) and `src/lib/`, which holds what they share: the GitHub and registry
+calls, the YAML reader for pnpm's files, and the one copy of each version rule (which release
+is newer and old enough, update signals, Node.js and gitleaks releases), so a PR always
+proposes what the dashboard lists. Node.js runs the `.ts` files as they are, with its
+built-in type stripping, so only erasable syntax is allowed (`erasableSyntaxOnly` in
+`tsconfig.json`), imports name the `.ts` extension, and there are no runtime npm packages:
+`fetch`, `node:fs`, `node:child_process` and friends do the work. Keep the pure parts
+(parsing, rendering, deciding) separate from the I/O so they can be unit-tested from fixtures
+in `*.test.ts` next to the module.
 
 oxlint is configured by `.oxlintrc.json`, the rule set of `valuecodes/agentic-monorepo-starter`
 without its React, a11y, vitest and workspace-boundary rules: every rule listed, type-aware
 through `oxlint-tsgolint`, functions as arrow expressions, `type` over `interface`, no non-null
 assertions, declarations first and one `export { … }` list at the bottom of each module. It
-prints nothing when clean. Knip (`knip.jsonc`) starts from `src/dashboard/main.ts` and the
+prints nothing when clean. Knip (`knip.jsonc`) starts from the two `main.ts` files and the
 tests, so an export nothing imports is a finding: drop the `export`, don't add a test for it.
 
 Git hooks live in `.githooks/` as plain shell scripts, enabled by `pnpm install` through the
@@ -97,7 +102,7 @@ is the check to require on `main`.
   `persist-credentials: false` and run no repo code.
 - **Few third-party actions.** Stick to `actions/*` plus the ones already in use; do the rest
   in `src/` (TypeScript, run by Node.js as is) or, for short glue around a tool, in shell with
-  `gh`, `jq`, `yq` and `curl`, which the runner ships. Download any extra tool by exact version
+  `gh`, `jq` and `curl`, which the runner ships. Download any extra tool by exact version
   and verify its checksum (see actionlint in `workflow-lint.yml`).
 - **Scripts reach the runner by checkout.** A caller gets only the workflow file, so a job that
   runs `src/` first checks this repo out at `job.workflow_sha` (the commit the caller pinned)

@@ -34,9 +34,8 @@ changes code; for PRs, add [`maintenance-updates.yml`](#maintenance-updatesyml) 
   and makes the run red.
 - Only `GITHUB_TOKEN`: the `audit` job runs `pnpm audit` from the lockfile without installing
   or running repo code, and the files are read through the REST API.
-- The sections are built by TypeScript in [`src/dashboard/`](src/dashboard/). The
-  `update-issue` job checks this repo out at the commit you pinned and runs them with Node.js;
-  nothing is installed from npm.
+- The steps are TypeScript in [`src/dashboard/`](src/dashboard/). Both jobs check this repo
+  out at the commit you pinned and run them with Node.js; nothing is installed from npm.
 
 To see the body for a repo without touching its issue, run
 `scripts/dashboard-dry-run.sh owner/repo <commit> <checkout>`.
@@ -115,6 +114,9 @@ dashboard lists on the current major. Each kind is its own job, so a failure nam
 - PR titles are plain sentences (`Update Node.js to 24.23.0`); commits use
   `chore: update Node.js to 24.23.0`. The body follows the dashboard's style.
 - Commits go through the API, so they are signed and no credentials touch a checkout.
+- The steps are TypeScript in [`src/updates/`](src/updates/), checked out at the commit you
+  pinned and run with Node.js; nothing is installed from npm. The rules are the dashboard's
+  own, so a PR proposes the version the dashboard lists.
 - A PR changes only the files in the table, so any other mention of the exact version goes
   stale. In docs, name the major and point at the file that holds the exact version, such as
   "Node.js 26 (exact version in `.nvmrc`)". Update a pin outside the repo, such as a hosting
@@ -126,7 +128,8 @@ Supply chain guards:
   least `min-release-age-days` × 1440) and `trustPolicy: no-downgrade`, which hold the
   transitive versions pnpm picks to the same rules.
 - The lockfile is resolved with `--lockfile-only --ignore-scripts --ignore-pnpmfile`, in a
-  checkout without credentials or token: nothing is installed and no repo code runs. The pnpm
+  checkout of the caller without credentials or token: nothing is installed and no repo code
+  runs. The pnpm
   that resolves is the one the repo already pins, never the proposed one; for a pnpm update,
   any lockfile change beyond pnpm's own entries stops the run.
 - Every version an update adds is looked up on osv.dev. A malicious hit opens no PR, closes the
