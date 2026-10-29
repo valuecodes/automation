@@ -294,6 +294,21 @@ jobs:
             printf 'current\npnpm %s is held back by update signals, see the dashboard\n' "$version" > "$OUT/state"
             exit 0
           fi
+          # The packument is one cached object, and one has listed a version
+          # the registry never had, so the version endpoint (another object)
+          # has to serve the pick too. Not served is inconclusive: `unclear`
+          # leaves an open PR alone. Anything but 200 or 404 is an outage.
+          code=$(curl -sS --compressed --retry 3 --retry-connrefused -o "$RUNNER_TEMP/pnpm-version.json" -w '%{http_code}' "https://registry.npmjs.org/pnpm/$version" || true)
+          if [[ $code == 200 ]] && jq -e --arg v "$version" '.version == $v' "$RUNNER_TEMP/pnpm-version.json" > /dev/null; then
+            :
+          elif [[ $code == 200 || $code == 404 ]]; then
+            echo "::warning::The packument lists pnpm $version but the registry does not serve it (HTTP $code); nothing proposed this run."
+            printf 'unclear\nthe registry lists pnpm %s but does not serve it; nothing proposed this run\n' "$version" > "$OUT/state"
+            exit 0
+          else
+            echo "::error::Could not confirm pnpm $version with the registry (HTTP $code)."
+            exit 1
+          fi
           date=$(jq -r '.inMajorDate' <<<"$newer")
 
           # Corepack checks the tarball against the hash in `packageManager`, so a
@@ -449,15 +464,20 @@ jobs:
           # Direct updates wait as long as pnpm makes the transitive ones wait.
           cutoff=$(( $(date +%s) - age * 60 ))
 
-          # Full packuments (they carry `time`), as in the dashboard.
+          # Full packuments (they carry `time`), as in the dashboard. One line
+          # per download names the edge and the cached object it served, the
+          # evidence a stale packument leaves behind; the resolve step's
+          # diagnostics print it.
           jq -r 'keys[]' "$work/catalog.json" | while IFS= read -r name; do
             enc=${name//\//%2F}
             printf 'url = "https://registry.npmjs.org/%s"\noutput = "%s/%s.json"\n' "$enc" "$work" "$enc"
           done > "$work/urls.txt"
-          curl -fsSL --compressed --retry 3 --parallel --parallel-max 6 --config "$work/urls.txt"
+          curl -fsSL --compressed --retry 3 --parallel --parallel-max 6 --config "$work/urls.txt" \
+            -w '%{url} %{http_code} cf-ray=%header{cf-ray} cf-cache-status=%header{cf-cache-status} age=%header{age} etag=%header{etag}\n' > "$work/packuments.log"
 
           : > "$work/kept.jsonl"
           : > "$work/flagged.md"
+          : > "$work/phantom.txt"
           majors=0
           jq -r 'to_entries[] | "\(.key)\t\(.value | tostring)"' "$work/catalog.json" | while IFS=$'\t' read -r name spec; do
             if [[ ! $spec =~ ^([\^~]?)([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
@@ -478,8 +498,23 @@ jobs:
             flagged=$(jq -r --arg name "$name" --arg cur "$cur" --arg target "$target" -f "$SRC/signals.jq" "$packument")
             if [[ -n $flagged ]]; then
               echo "$flagged" >> "$work/flagged.md"
-            else
+              continue
+            fi
+            # The packument is one cached object, and one has listed a version
+            # the registry never had, so the version endpoint (another object)
+            # has to serve the pick before it is proposed. Not served leaves
+            # the package out of this run, in the PR's "Left out" table.
+            # Anything but 200 or 404 is an outage and fails the step.
+            code=$(curl -sS --compressed --retry 3 --retry-connrefused -o "$work/version.json" -w '%{http_code}' "https://registry.npmjs.org/${name//\//%2F}/$target" || true)
+            if [[ $code == 200 ]] && jq -e --arg v "$target" '.version == $v' "$work/version.json" > /dev/null; then
               jq -c --arg prefix "$prefix" '{name, prefix: $prefix, current, target: .inMajor, date: .inMajorDate}' <<<"$row" >> "$work/kept.jsonl"
+            elif [[ $code == 200 || $code == 404 ]]; then
+              echo "::warning::The packument lists $name $target but the registry does not serve it (HTTP $code); left out. Download: $(grep -F "/${name//\//%2F} " "$work/packuments.log" || true)"
+              printf '| `%s` | %s → %s | not served by the registry (version endpoint answered HTTP %s); the packument may be stale |\n' "$name" "$cur" "$target" "$code" >> "$work/flagged.md"
+              echo "$name $target" >> "$work/phantom.txt"
+            else
+              echo "::error::Could not confirm $name $target with the registry (HTTP $code)."
+              exit 1
             fi
           done
           if [[ -f $work/majors ]]; then
@@ -487,7 +522,20 @@ jobs:
           fi
           kept=$(wc -l < "$work/kept.jsonl")
           flagged=$(wc -l < "$work/flagged.md")
+          phantom=$(wc -l < "$work/phantom.txt")
           if (( kept == 0 )); then
+            # A version the registry did not serve is no evidence that the
+            # update is not due, so the result is inconclusive and the final
+            # step leaves an open PR alone instead of closing it.
+            if (( phantom > 0 )); then
+              read -r pname pversion < "$work/phantom.txt"
+              more=""
+              if (( phantom > 1 )); then
+                more=" and $(( phantom - 1 )) more"
+              fi
+              printf 'unclear\nthe registry lists %s %s but does not serve it%s; nothing proposed this run\n' "$pname" "$pversion" "$more" > "$OUT/state"
+              exit 0
+            fi
             if (( flagged > 0 )); then
               reason="$flagged catalog updates are held back by update signals, see the dashboard"
             else
@@ -641,6 +689,9 @@ jobs:
             }
             echo "## Lockfile resolution failed ($KIND)" >> "$GITHUB_STEP_SUMMARY"
             { pnpm --config.pm-on-fail=warn --version; node --version; } 2>&1 | section "Versions (pnpm, Node.js)" || true
+            if [[ -f $work/packuments.log ]]; then
+              section "Packument downloads of this run (URL, status, edge, cached object)" < "$work/packuments.log" || true
+            fi
             git diff -- pnpm-workspace.yaml package.json 2>&1 | section "The update's edit" || true
             pnpm --config.pm-on-fail=warn config list 2>&1 | section "pnpm's view of the config" || true
             {
@@ -805,9 +856,9 @@ jobs:
             if (( flagged > 0 )); then
               echo "> [!WARNING]"
               if (( flagged == 1 )); then
-                echo "> 1 package was left out because of update signals, see below."
+                echo "> 1 package was left out, see below."
               else
-                echo "> $flagged packages were left out because of update signals, see below."
+                echo "> $flagged packages were left out, see below."
               fi
               echo
             fi
@@ -840,7 +891,7 @@ jobs:
               echo
               echo "### Left out"
               echo
-              echo "| Package | Update | Signals |"
+              echo "| Package | Update | Why |"
               echo "| --- | --- | --- |"
               cat "$work/flagged.md"
             fi
@@ -943,6 +994,14 @@ jobs:
               all(.commits[]; .author.login == "github-actions[bot]" and (.commit.message | split("\n") | index($trailer) != null))
             ' "$RUNNER_TEMP/compare.json" > /dev/null
           }
+
+          # A version the packument listed but the registry did not serve is
+          # no evidence that the update is not due, so nothing is closed.
+          if [[ $state == unclear ]]; then
+            echo "**$label:** $reason." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::$label: $reason; ${number:+#$number and }$branch are left as they are."
+            exit 0
+          fi
 
           if [[ $state != update ]]; then
             echo "**$label:** $reason." >> "$GITHUB_STEP_SUMMARY"
