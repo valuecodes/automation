@@ -51,7 +51,7 @@ const describePath = (path: string): string => {
 };
 
 const ADVISORY_ID = /^[A-Za-z0-9._-]+$/;
-const ADVISORY_URL = /^https:\/\/[^\s()<>]+$/;
+const ADVISORY_URL = /^https:\/\/[^\s()<>|]+$/;
 
 /**
  * The advisory as a link, or its id as plain text when the id or URL from the

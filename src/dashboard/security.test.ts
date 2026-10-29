@@ -66,12 +66,20 @@ test("table links an advisory only when its id and URL fit a Markdown link", () 
         url: "https://github.com/advisories/GHSA-z",
         findings: [{ version: "1.0.0", paths: [".>c"] }],
       },
+      "4": {
+        severity: "low",
+        module_name: "d",
+        github_advisory_id: "GHSA-w",
+        url: "https://example.test/x|y",
+        findings: [{ version: "1.0.0", paths: [".>d"] }],
+      },
     },
   };
   assert.deepEqual(table(odd), [
     "| ⬜ low | `a` 1.0.0 | none | a (direct) | GHSA-x |",
     "| ⬜ low | `b` 1.0.0 | none | b (direct) | GHSA-y |",
     "| ⬜ low | `c` 1.0.0 | none | c (direct) | ](https://evil.test)\\| |",
+    "| ⬜ low | `d` 1.0.0 | none | d (direct) | GHSA-w |",
   ]);
 });
 
