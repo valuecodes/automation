@@ -106,29 +106,29 @@ test("render says up to date, or counts outdated and unparsed entries", () => {
   assert.equal(warn.status.state, "warn");
 });
 
-test("render names a version the registry does not serve on both paths", () => {
+test("render names a version pnpm cannot resolve on both paths", () => {
   const phantom = [{ name: "a|b", version: "9.9.9" }];
   const ok = render([current], 14, null, false, phantom);
   assert.deepEqual(ok.status, {
     state: "warn",
-    text: "1 not served",
-    details: "1 package, 1 not served by the registry",
+    text: "1 not resolvable",
+    details: "1 package, 1 listed but not resolvable",
   });
   assert.match(ok.markdown, /no confirmed update for 1 catalog package\./);
   assert.doesNotMatch(ok.markdown, /up to date/);
   assert.match(
     ok.markdown,
-    /The registry lists `a\\\|b` 9\.9\.9 but does not serve it; ignored\./,
+    /The full packument of `a\\\|b` lists 9\.9\.9, but the one pnpm resolves from does not; ignored\./,
   );
   const out = render(rows, 14, null, false, phantom);
   assert.equal(
     out.status.details,
-    "1 of 3 outdated, 1 not an exact version, 1 not served by the registry",
+    "1 of 3 outdated, 1 not an exact version, 1 listed but not resolvable",
   );
-  assert.match(out.markdown, /does not serve it; ignored\.\n\n\| Package/);
+  assert.match(out.markdown, /does not; ignored\.\n\n\| Package/);
 });
 
-test("confirm drops an unserved version with its date and keeps the rest", async () => {
+test("confirm drops an unresolvable version with its date and keeps the rest", async () => {
   const both: Row = {
     name: "a",
     current: "1.0.0",
