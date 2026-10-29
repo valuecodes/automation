@@ -69,6 +69,7 @@ test("validSchedule drops entries whose dates are not plain dates", () => {
   const cleaned = validSchedule({
     ...schedule,
     v28: { start: "2027-04-20", end: "soon" },
+    v29: { start: "2027-10-20" },
     v30: "later",
   });
   assert.deepEqual(Object.keys(cleaned).sort(), ["v20", "v22", "v24", "v26"]);

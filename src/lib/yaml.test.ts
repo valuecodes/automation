@@ -137,6 +137,21 @@ test("parseYaml reads a workspace file with comments, lists and quotes", () => {
     },
   ]);
   assert.deepEqual(parseYaml(""), [null]);
+  // Plain scalars run to the end of the line; numbers are integers only.
+  assert.deepEqual(
+    parseYaml(
+      "deprecated: request has been deprecated, see https://x\nv: 1.10\nn: 9.0\ni: 42\n",
+    ),
+    [
+      {
+        deprecated: "request has been deprecated, see https://x",
+        v: "1.10",
+        n: "9.0",
+        i: 42,
+      },
+    ],
+  );
+  assert.deepEqual(parseYaml("- a, b\n- {x: 1}\n"), [["a, b", { x: 1 }]]);
   assert.deepEqual(parseYaml("a: 'it''s'\nb: \"x\\ty\"\n"), [
     { a: "it's", b: "x\ty" },
   ]);

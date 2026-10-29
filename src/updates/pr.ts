@@ -141,7 +141,13 @@ const diffOf = async (out: string, path: string): Promise<string> => {
     `${out}/old/${path}`,
     `${out}/new/${path}`,
   ]);
-  return result.stdout.split("\n").slice(0, 300).join("\n");
+  // As `head -n 300`: whole lines, each with its newline.
+  return result.stdout
+    .split("\n")
+    .slice(0, 300)
+    .map((l) => `${l}\n`)
+    .join("")
+    .replace(/\n\n$/, "\n");
 };
 
 type Log = (line: string) => void;
@@ -248,7 +254,7 @@ const publish = async (
     }
     appendRunnerFile(
       "GITHUB_STEP_SUMMARY",
-      `\n<details><summary>Diff</summary>\n\n\`\`\`diff\n${diffs.join("\n")}\n\`\`\`\n\n</details>\n`,
+      `\n<details><summary>Diff</summary>\n\n\`\`\`diff\n${diffs.join("")}\`\`\`\n\n</details>\n`,
     );
     log("Dry run: the planned PR is in the run summary; nothing was pushed.");
     return;
@@ -338,9 +344,15 @@ const publish = async (
       throw error;
     }
     if (labels.length > 0) {
-      await api("POST", `repos/${repo}/issues/${opened.number}/labels`, {
-        labels,
-      });
+      try {
+        await api("POST", `repos/${repo}/issues/${opened.number}/labels`, {
+          labels,
+        });
+      } catch {
+        warning(
+          `Could not label PR #${opened.number}; it is open without the label.`,
+        );
+      }
     }
     log(`Opened ${opened.html_url ?? `#${opened.number}`}.`);
     created = true;

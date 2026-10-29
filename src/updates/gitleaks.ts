@@ -10,7 +10,7 @@ import type { Release } from "../lib/gitleaks.ts";
 import { api as githubApi } from "../lib/github.ts";
 import type { Api } from "../lib/github.ts";
 import { fetchJson, request } from "../lib/http.ts";
-import { updateContext } from "./context.ts";
+import { updateContext, validateGitleaksScript } from "./context.ts";
 import {
   addFile,
   replaceOnce,
@@ -100,6 +100,12 @@ const gitleaks = async (api: Api = githubApi): Promise<void> => {
   if (ctx.gitleaksScript === "") {
     writeState(ctx.out, "na", "gitleaks-script is empty");
     return;
+  }
+  // The path lands in local paths and the PR tree; checked in setup, and
+  // again here, since this is where it is used.
+  const invalid = validateGitleaksScript(ctx.gitleaksScript);
+  if (invalid !== null) {
+    throw new Fail(invalid);
   }
   const file = `${ctx.src}/${FILES.gitleaksScript}`;
   if (!existsSync(file)) {

@@ -35,6 +35,10 @@ const run = (
         const failure = error as NodeJS.ErrnoException & { killed?: boolean };
         if (typeof failure.code === "number") {
           resolve({ code: failure.code, stdout, stderr });
+        } else if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+          reject(
+            new Error(`${file} printed more than the 64 MiB this step keeps.`),
+          );
         } else if (failure.killed === true) {
           resolve({
             code: 124,
