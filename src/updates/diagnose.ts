@@ -166,10 +166,15 @@ const diagnose = async (
       `${failing.name}@${failing.spec} on registry.npmjs.org (not the caller's registry, if it uses another)`,
     ];
     try {
-      const response = await request(packumentUrl(failing.name), {
-        headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(60_000),
-      });
+      // One attempt, as curl's `--max-time 60`: this is evidence, not a step.
+      const response = await request(
+        packumentUrl(failing.name),
+        {
+          headers: { accept: "application/json" },
+          signal: AbortSignal.timeout(60_000),
+        },
+        0,
+      );
       for (const h of [
         "date",
         "cf-cache-status",
