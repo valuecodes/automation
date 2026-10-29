@@ -11,3 +11,8 @@ set -eu
 
 pnpm format:check
 pnpm lint
+
+# Scan only what is staged. This fails closed: when neither gitleaks nor Docker
+# is available, secrets:scan exits 2 and the commit is refused, since the point
+# of this hook is to stop a secret before it reaches the remote.
+pnpm secrets:scan --staged

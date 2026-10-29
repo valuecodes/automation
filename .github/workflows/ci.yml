@@ -2,7 +2,8 @@ name: CI
 
 # Checks formatting with oxfmt, lints, typechecks and tests `src/` (oxlint,
 # tsc, node --test) and runs knip over it, shellchecks
-# `scripts/`, lints the workflow files through this repo's own
+# `scripts/` and `.github/scripts/`, scans the git history for secrets with
+# gitleaks, lints the workflow files through this repo's own
 # `workflow-lint.yml` and runs the dashboard and the update PRs against this
 # repo in dry-run mode. The `ci` job is the check
 # to require on `main`.
@@ -45,7 +46,7 @@ jobs:
       - name: shellcheck
         run: |
           set -euo pipefail
-          shellcheck scripts/*.sh
+          shellcheck scripts/*.sh .github/scripts/*.sh
 
   typecheck:
     name: typecheck
@@ -123,6 +124,26 @@ jobs:
           set -euo pipefail
           pnpm knip
 
+  secrets-scan:
+    name: secrets-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      # Full history: gitleaks scans every commit, not just the checked-out tree.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Same script as `pnpm secrets:scan`; the runner has no gitleaks, so it
+      # runs the pinned Docker image and needs no pnpm or Node.js setup.
+      - name: gitleaks
+        run: |
+          set -euo pipefail
+          sh .github/scripts/secrets-scan.sh
+
   # Runs the reusable workflows at this commit, so a change to one is checked
   # on its own PR. Same `$/` caveat as the setup action above.
   workflow-lint:
@@ -172,6 +193,7 @@ jobs:
         typecheck,
         test,
         knip,
+        secrets-scan,
         workflow-lint,
         maintenance-dashboard,
         maintenance-updates,
