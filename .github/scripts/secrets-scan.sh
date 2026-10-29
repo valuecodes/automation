@@ -35,6 +35,17 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     "$repo_root"/*) ;;
     *) set -- -v "$git_common_dir:$git_common_dir:ro" "$@" ;;
   esac
+  # `git commit -a` and `git commit <paths>` hand the hook a temporary index
+  # in GIT_INDEX_FILE. The local binary inherits it, but the container would
+  # read the ordinary index and miss what is being committed, so pass it on.
+  # The file lives in the git dir, which is mounted above at its own path.
+  if [ -n "${GIT_INDEX_FILE:-}" ]; then
+    case "$GIT_INDEX_FILE" in
+      /*) index_file=$GIT_INDEX_FILE ;;
+      *) index_file=$PWD/$GIT_INDEX_FILE ;;
+    esac
+    set -- -e "GIT_INDEX_FILE=$index_file" "$@"
+  fi
   exec docker run --rm "$@"
 fi
 
