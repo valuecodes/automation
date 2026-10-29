@@ -82,5 +82,5 @@ const context = (): Context => ({
   sha: env("SHA"),
 });
 
-export { Fail, env, context };
-export type { Context };
+export { Fail, env, common, context };
+export type { Common, Context };
