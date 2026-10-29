@@ -73,5 +73,5 @@ const repoFile = async (
 const encodePath = (path: string): string =>
   path.split("/").map(encodeURIComponent).join("/");
 
-export { api, repoFile };
+export { api, isNotFound, repoFile };
 export type { Api };

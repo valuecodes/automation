@@ -59,4 +59,4 @@ const readPackument = (dir: string, name: string): Packument => {
   return pack;
 };
 
-export { NAME, downloadPackuments, readPackument };
+export { NAME, encodeName, packumentUrl, downloadPackuments, readPackument };
