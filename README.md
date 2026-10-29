@@ -118,7 +118,8 @@ dashboard lists on the current major. Each kind is its own job, so a failure nam
   its update is no longer due. A PR someone closed stays closed until the update changes.
 - A branch with someone else's commit is left alone, so fixes pushed to a PR are safe.
 - PR titles are plain sentences (`Update Node.js to 24.23.0`); commits use
-  `chore: update Node.js to 24.23.0`. The body follows the dashboard's style.
+  `chore: update Node.js to 24.23.0`. The body opens with a table of the current and new
+  versions and lists any new locked versions below it.
 - Commits go through the API, so they are signed and no credentials touch a checkout.
 - The steps are TypeScript in [`src/updates/`](src/updates/), checked out at the commit you
   pinned and run with Node.js; nothing is installed from npm. The rules are the dashboard's

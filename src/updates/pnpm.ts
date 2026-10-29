@@ -62,9 +62,9 @@ const render = (
   hashed: boolean,
 ): Rendered => {
   const content = [
-    "| Check | Status | Details |",
-    "| --- | --- | --- |",
-    `| pnpm | ⬆️ update | ${current} → ${version} (${date}) |`,
+    "| Package | Current | Update | Released |",
+    "| --- | --- | --- | --- |",
+    `| pnpm | ${current} | ${version} | ${date} |`,
     "",
     `Release notes: [v${version}](https://github.com/pnpm/pnpm/releases/tag/v${version}).`,
   ];

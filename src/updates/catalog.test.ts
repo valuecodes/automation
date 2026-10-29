@@ -8,6 +8,7 @@ import {
   guard,
   pick,
   renderCatalog,
+  renderLockfile,
 } from "./catalog.ts";
 import type { Picks } from "./catalog.ts";
 
@@ -198,4 +199,28 @@ test("renderCatalog lists the picks, the lockfile changes and what was left out"
       "1 new locked version, all checked on osv.dev: none is in the OpenSSF malicious-packages database.",
     ),
   );
+});
+
+test("renderLockfile puts the lead first and lists nothing when nothing is new", () => {
+  const added = Array.from({ length: 101 }, (_, i) => ({
+    name: `p${i}`,
+    version: "1.0.0",
+  }));
+  const { content, summary } = renderLockfile(added, "https://runs", "Why.");
+  assert.deepEqual(content.slice(0, 3), [
+    "### Lockfile changes",
+    "",
+    "Why. 101 new locked versions, all checked on osv.dev: none is in the OpenSSF malicious-packages database.",
+  ]);
+  assert.ok(
+    content.includes(
+      "| … 1 more, see [the latest run's summary](https://runs) |",
+    ),
+  );
+  assert.deepEqual(content.slice(-2), ["", "</details>"]);
+  assert.equal(summary.length, 103);
+  assert.deepEqual(renderLockfile([], "u", "Why."), {
+    content: ["### Lockfile changes", "", "Why. No new locked versions."],
+    summary: [],
+  });
 });

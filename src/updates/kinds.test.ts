@@ -18,9 +18,9 @@ test("the Node.js update edits .nvmrc and renders the PR", () => {
   );
   assert.equal(plain.title, "Update Node.js to 26.12.3");
   assert.deepEqual(plain.content.slice(0, 3), [
-    "| Check | Status | Details |",
-    "| --- | --- | --- |",
-    "| Node.js | ⬆️ update | 26.12.1 → 26.12.3 (2026-10-28) · Active LTS, end of life 2029-04-30 |",
+    "| Package | Current | Update | Released | Support |",
+    "| --- | --- | --- | --- | --- |",
+    "| Node.js | 26.12.1 | 26.12.3 | 2026-10-28 | Active LTS, end of life 2029-04-30 |",
   ]);
   assert.match(plain.content.at(-2) ?? "", /CHANGELOG_V26\.md/);
   const security = renderNode(
@@ -32,9 +32,9 @@ test("the Node.js update edits .nvmrc and renders the PR", () => {
     "> [!WARNING]",
     "> This update includes a Node.js security release.",
   ]);
-  assert.match(
-    security.content[5] ?? "",
-    /⚠️ attention \| 26\.12\.1 → 26\.12\.2 \(2026-10-01\), security release · x/,
+  assert.equal(
+    security.content[5],
+    "| Node.js | 26.12.1 | 26.12.2 | 2026-10-01 | x |",
   );
 });
 
@@ -69,10 +69,11 @@ test("the pnpm update reads the pin, moves the hash and edits package.json", () 
   );
   const rendered = renderPnpm("12.11.2", "12.12.0", "2026-10-01", true);
   assert.equal(rendered.title, "Update pnpm to 12.12.0");
-  assert.equal(
-    rendered.content[2],
-    "| pnpm | ⬆️ update | 12.11.2 → 12.12.0 (2026-10-01) |",
-  );
+  assert.deepEqual(rendered.content.slice(0, 3), [
+    "| Package | Current | Update | Released |",
+    "| --- | --- | --- | --- |",
+    "| pnpm | 12.11.2 | 12.12.0 | 2026-10-01 |",
+  ]);
   assert.match(
     rendered.content.at(-1) ?? "",
     /sha512 integrity for pnpm 12\.12\.0/,
@@ -105,6 +106,11 @@ test("the gitleaks update edits the version and digest lines", () => {
   );
   const rendered = renderGitleaks("8.28.0", "8.30.0", "2026-09-20", true);
   assert.equal(rendered.title, "Update gitleaks to 8.30.0");
+  assert.deepEqual(rendered.content.slice(0, 3), [
+    "| Package | Current | Update | Released |",
+    "| --- | --- | --- | --- |",
+    "| gitleaks | 8.28.0 | 8.30.0 | 2026-09-20 |",
+  ]);
   assert.match(
     rendered.content.at(-1) ?? "",
     /digest ghcr\.io serves for `gitleaks:v8\.30\.0`/,

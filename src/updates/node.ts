@@ -25,15 +25,15 @@ type Rendered = { title: string; content: string[] };
 
 const render = (current: string, found: Update, life: string): Rendered => {
   const major = current.split(".")[0] ?? "";
-  const status = found.security ? "⚠️ attention" : "⬆️ update";
-  const details = `${current} → ${found.version} (${found.date})${found.security ? ", security release" : ""}`;
+  // The warning above the table is the one place that names a security
+  // release, so the row keeps the same columns as the other kinds.
   const content = found.security
     ? ["> [!WARNING]", "> This update includes a Node.js security release.", ""]
     : [];
   content.push(
-    "| Check | Status | Details |",
-    "| --- | --- | --- |",
-    `| Node.js | ${status} | ${details} · ${life} |`,
+    "| Package | Current | Update | Released | Support |",
+    "| --- | --- | --- | --- | --- |",
+    `| Node.js | ${current} | ${found.version} | ${found.date} | ${life} |`,
     "",
     `Release notes: [v${found.version}](https://github.com/nodejs/node/releases/tag/v${found.version}) · [every v${major} release](https://github.com/nodejs/node/blob/main/doc/changelogs/CHANGELOG_V${major}.md).`,
     "Also update any Node.js pin outside the repo, such as a hosting build variable.",
