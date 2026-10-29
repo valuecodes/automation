@@ -2,7 +2,12 @@
 # `package.json`. Update everything with `pnpm up --latest`, which rewrites only
 # this file and the lockfile. Scoped keys must be double-quoted.
 catalog:
+  "@types/node": 26.6.5
+  knip: 6.41.0
   oxfmt: 0.72.0
+  oxlint: 1.88.0
+  oxlint-tsgolint: 7.0.2004
+  typescript: 7.0.2
 
 # Makes `pnpm add` / `pnpm update` use the catalog and reject conflicting
 # versions. Plain `pnpm install` never evaluates it, so it is an authoring

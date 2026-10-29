@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Runs every `run:` step of .github/workflows/maintenance-dashboard.yml here,
-# in order and with dry-run on, and prints the dashboard title and body. CI
+# Runs the steps of .github/workflows/maintenance-dashboard.yml here, in
+# order and with dry-run on, and prints the dashboard title and body: the
+# audit job's shell steps out of the workflow file, then the section scripts
+# in src/dashboard/ with the local Node.js. CI
 # runs the dashboard in dry-run mode against this repo only; this is the way
 # to see the body for any repo before a change is merged and re-pinned.
 #
@@ -13,7 +15,7 @@
 # Needs gh (logged in), jq, yq, pnpm and curl; the runner ships all of them.
 # Talks to the real registries and osv.dev, never touches an issue. The body
 # lands in tmp/dashboard/<owner>-<repo>/dashboard.md (ignored by git) next to
-# the steps' work files, and is printed too. Like the workflow, every step runs
+# the steps' work files, and is printed too. It needs the Node.js in .nvmrc. Like the workflow, every step runs
 # even when an earlier one failed; the exit code is 1 when any step failed.
 set -euo pipefail
 
@@ -22,7 +24,7 @@ workflow="$root/.github/workflows/maintenance-dashboard.yml"
 checkout=${3:-$root}
 checkout=$(cd "$checkout" && pwd)
 
-for tool in gh jq yq pnpm curl; do
+for tool in gh jq yq pnpm curl node; do
   if ! command -v "$tool" > /dev/null; then
     echo "::error::$tool is not installed; the workflow's steps need it." >&2
     exit 1
@@ -49,10 +51,8 @@ export DRY_RUN=true
 export RUNNER_TEMP="$root/tmp/dashboard/${REPO//\//-}"
 rm -rf "$RUNNER_TEMP"
 mkdir -p "$RUNNER_TEMP"
-export GITHUB_ENV="$RUNNER_TEMP/github.env"
 export GITHUB_OUTPUT="$RUNNER_TEMP/github.output"
 export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/dashboard.md"
-: > "$GITHUB_ENV"
 : > "$GITHUB_OUTPUT"
 : > "$GITHUB_STEP_SUMMARY"
 
@@ -69,47 +69,48 @@ step() {
   ' "$workflow"
 }
 
-# Runs one step from the given directory, with whatever earlier steps put in
-# $GITHUB_ENV, and reports its exit code instead of stopping, like
-# `continue-on-error`. A failure is remembered for the final exit code.
+# Reports a step's exit code instead of stopping, like `continue-on-error`.
+# A failure is remembered for the final exit code.
 failed=0
+report() {
+  if (( $1 != 0 )); then
+    echo "--- exit $1" >&2
+    failed=1
+  fi
+}
+
+# One shell step of the audit job, run in the checkout.
 run_step() {
-  local name=$1 dir=$2 code
+  local name=$1 code
   step "$name" > "$RUNNER_TEMP/step.sh"
   if [[ ! -s $RUNNER_TEMP/step.sh ]]; then
     echo "::error::Step not found in the workflow: $name" >&2
     exit 1
   fi
   echo "=== $name" >&2
-  set -a
-  # shellcheck disable=SC1090
-  . "$GITHUB_ENV"
-  set +a
   set +e
-  (cd "$dir" && bash "$RUNNER_TEMP/step.sh") >&2
-  code=$?
+  (cd "$checkout" && bash "$RUNNER_TEMP/step.sh") >&2
+  report $?
   set -e
-  if (( code != 0 )); then
-    echo "--- exit $code" >&2
-    failed=1
-  fi
-  return 0
 }
 
-# The audit job runs in the checkout; the update-issue job needs no checkout.
-run_step "Check for a pnpm project" "$checkout"
+# One step of the update-issue job, which needs no checkout.
+run_script() {
+  echo "=== $1" >&2
+  set +e
+  node "$root/src/dashboard/main.ts" "$1" >&2
+  report $?
+  set -e
+}
+
+run_step "Check for a pnpm project"
 if grep -q '^pnpm=true' "$GITHUB_OUTPUT"; then
-  run_step "List the locked packages" "$checkout"
-  run_step "Run pnpm audit" "$checkout"
+  run_step "List the locked packages"
+  run_step "Run pnpm audit"
 fi
-run_step "Read the repo files at this commit" "$RUNNER_TEMP"
-run_step "Section: security (pnpm audit)" "$RUNNER_TEMP"
-run_step "Section: dependencies (catalog)" "$RUNNER_TEMP"
-run_step "Section: supply chain" "$RUNNER_TEMP"
-run_step "Section: pnpm" "$RUNNER_TEMP"
-run_step "Section: gitleaks" "$RUNNER_TEMP"
-run_step "Section: Node.js" "$RUNNER_TEMP"
-run_step "Update the dashboard issue" "$RUNNER_TEMP"
+for name in setup security catalog supply-chain pnpm gitleaks node issue; do
+  run_script "$name"
+done
 
 echo >&2
 echo "Title and body for $REPO at ${SHA:0:7}, saved as $GITHUB_STEP_SUMMARY:" >&2

@@ -1,0 +1,254 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  // Every rule is listed explicitly with every category off, mirroring
+  // eslint:recommended + typescript-eslint recommended/recommendedTypeChecked/
+  // stylisticTypeChecked, plus the strictness and style rules of
+  // valuecodes/agentic-monorepo-starter. Left out from there: the React,
+  // jsx-a11y and vitest plugins (this repo is Node.js scripts tested with
+  // `node:test`) and the workspace-boundary rules (one package, no `@repo/*`).
+  //
+  // `plugins` is explicit so only the listed ones load. Enabling a plugin adds
+  // no rules by itself: `correctness` must be turned off by name, since an
+  // empty `categories` leaves it on and silently adds ~57 rules, including
+  // ones tsc already reports.
+  "plugins": ["typescript", "import", "unicorn", "oxc"],
+  "categories": { "correctness": "off" },
+
+  // Type-aware rules need `oxlint-tsgolint`; without it oxlint silently skips
+  // them, so the `lint` script also passes `--type-aware` to fail loudly.
+  "options": { "typeAware": true },
+  "env": { "builtin": true },
+
+  // `.gitignore` is read natively.
+
+  // `node:test`'s `test()` returns a promise that the runner awaits itself.
+  "overrides": [
+    {
+      "files": ["**/*.test.ts"],
+      "rules": { "typescript/no-floating-promises": "off" }
+    }
+  ],
+
+  "rules": {
+    // eslint core -- eslint:recommended, minus the rules typescript-eslint
+    // turns back off for TS files because tsc already reports them.
+    "for-direction": "error",
+    "no-async-promise-executor": "error",
+    "no-case-declarations": "error",
+    "no-compare-neg-zero": "error",
+    "no-cond-assign": "error",
+    "no-constant-binary-expression": "error",
+    "no-constant-condition": "error",
+    "no-control-regex": "error",
+    "no-debugger": "error",
+    "no-delete-var": "error",
+    "no-dupe-else-if": "error",
+    "no-duplicate-case": "error",
+    "no-empty": "error",
+    "no-empty-character-class": "error",
+    "no-empty-pattern": "error",
+    "no-empty-static-block": "error",
+    "no-ex-assign": "error",
+    "no-extra-boolean-cast": "error",
+    "no-fallthrough": "error",
+    "no-global-assign": "error",
+    "no-invalid-regexp": "error",
+    "no-irregular-whitespace": "error",
+    "no-loss-of-precision": "error",
+    "no-misleading-character-class": "error",
+    "no-nonoctal-decimal-escape": "error",
+    "no-prototype-builtins": "error",
+    "no-regex-spaces": "error",
+    "no-self-assign": "error",
+    "no-shadow-restricted-names": "error",
+    "no-sparse-arrays": "error",
+    "no-unexpected-multiline": "error",
+    "no-unsafe-finally": "error",
+    "no-unsafe-optional-chaining": "error",
+    "no-unused-labels": "error",
+    "no-unused-private-class-members": "error",
+    "no-useless-backreference": "error",
+    "no-useless-catch": "error",
+    "no-useless-escape": "error",
+    "no-var": "error",
+    "prefer-const": "error",
+    "prefer-rest-params": "error",
+    "prefer-spread": "error",
+    "require-yield": "error",
+    "use-isnan": "error",
+    "valid-typeof": "error",
+
+    // typescript-eslint: recommended + recommendedTypeChecked
+    "typescript/await-thenable": "error",
+    "typescript/ban-ts-comment": "error",
+    "typescript/no-array-constructor": "error",
+    "typescript/no-array-delete": "error",
+    "typescript/no-base-to-string": "error",
+    "typescript/no-duplicate-enum-values": "error",
+    "typescript/no-duplicate-type-constituents": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-extra-non-null-assertion": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-for-in-array": "error",
+    "typescript/no-implied-eval": "error",
+    "typescript/no-misused-new": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
+    "typescript/no-redundant-type-constituents": "error",
+    "typescript/no-require-imports": "error",
+    "typescript/no-this-alias": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-declaration-merging": "error",
+    "typescript/no-unsafe-enum-comparison": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-unary-minus": "error",
+    "typescript/no-unused-expressions": "error",
+    "typescript/no-wrapper-object-types": "error",
+    "typescript/only-throw-error": "error",
+    "typescript/prefer-as-const": "error",
+    "typescript/prefer-namespace-keyword": "error",
+    "typescript/prefer-promise-reject-errors": "error",
+    "typescript/require-await": "error",
+    "typescript/restrict-plus-operands": "error",
+    "typescript/restrict-template-expressions": "error",
+    "typescript/triple-slash-reference": "error",
+    "typescript/unbound-method": "error",
+
+    // typescript-eslint: stylisticTypeChecked
+    "typescript/adjacent-overload-signatures": "error",
+    "typescript/array-type": "error",
+    "typescript/ban-tslint-comment": "error",
+    "typescript/class-literal-property-style": "error",
+    "typescript/consistent-generic-constructors": "error",
+    "typescript/consistent-indexed-object-style": "error",
+    "typescript/consistent-type-assertions": "error",
+    // `type` over the `interface` default: unions cannot be interfaces, so
+    // aliases are the one form that covers both.
+    "typescript/consistent-type-definitions": ["error", "type"],
+    "typescript/dot-notation": "error",
+    "typescript/no-confusing-non-null-assertion": "error",
+    "typescript/no-empty-function": "error",
+    "typescript/no-inferrable-types": "error",
+    "typescript/non-nullable-type-assertion-style": "error",
+    "typescript/prefer-find": "error",
+    "typescript/prefer-for-of": "error",
+    "typescript/prefer-function-type": "error",
+    "typescript/prefer-includes": "error",
+    "typescript/prefer-nullish-coalescing": "error",
+    "typescript/prefer-regexp-exec": "error",
+    "typescript/prefer-string-starts-ends-with": "error",
+
+    // Strictness on top of the presets.
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-unused-vars": [
+      "error",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
+    ],
+    "typescript/consistent-type-imports": [
+      "warn",
+      { "prefer": "type-imports", "fixStyle": "separate-type-imports" }
+    ],
+    "typescript/consistent-type-exports": [
+      "error",
+      { "fixMixedExportsWithInlineTypeSpecifier": false }
+    ],
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/no-deprecated": "error",
+    // Nursery rule, so warn only.
+    "typescript/no-unnecessary-condition": "warn",
+    "typescript/no-unnecessary-type-parameters": "error",
+    "typescript/prefer-readonly": "error",
+    "typescript/strict-boolean-expressions": "error",
+    "no-param-reassign": "error",
+    "no-nested-ternary": "error",
+    // Code lines only, so comments and spacing are never what trips it.
+    "max-lines": [
+      "error",
+      { "max": 400, "skipBlankLines": true, "skipComments": true }
+    ],
+
+    // Style: one way to write functions, and the cleanups below.
+    "func-style": ["error", "expression"],
+    "arrow-body-style": ["error", "as-needed"],
+    "typescript/method-signature-style": ["error", "property"],
+    "eqeqeq": "error",
+    "curly": "error",
+    "object-shorthand": "error",
+    "prefer-template": "error",
+    "no-else-return": "error",
+    "no-lonely-if": "error",
+    "no-useless-return": "error",
+    "no-unneeded-ternary": "error",
+    "no-useless-concat": "error",
+    "no-useless-computed-key": "error",
+    "no-useless-constructor": "error",
+    "logical-assignment-operators": "error",
+    "prefer-arrow-callback": "error",
+    "prefer-object-spread": "error",
+    "yoda": "error",
+    "no-implicit-coercion": "error",
+    "default-param-last": "error",
+    "default-case-last": "error",
+    "no-return-assign": "error",
+    "no-multi-assign": "error",
+    "radix": "error",
+    "array-callback-return": "error",
+    "typescript/no-unnecessary-template-expression": "error",
+    "typescript/no-unnecessary-boolean-literal-compare": "error",
+    "typescript/no-unnecessary-type-arguments": "error",
+    "typescript/no-unnecessary-type-conversion": "error",
+    "typescript/prefer-reduce-type-parameter": "error",
+    "typescript/consistent-return": "error",
+    // `await` inside try/catch so the catch sees the rejection; not elsewhere.
+    "typescript/return-await": ["error", "in-try-catch"],
+    "typescript/no-misused-promises": "error",
+
+    // eslint-plugin-import
+    "import/consistent-type-specifier-style": ["error", "prefer-top-level"],
+    // Circular imports silently break module init order.
+    "import/no-cycle": "error",
+    "import/no-duplicates": "error",
+    "import/no-self-import": "error",
+    // Named exports only; `main.ts` is run, never imported.
+    "import/no-default-export": "error",
+    // Declarations first, one export list at the bottom.
+    "import/exports-last": "error",
+    "import/group-exports": "error",
+    "import/first": "error",
+    "import/newline-after-import": "error",
+    "import/no-mutable-exports": "error",
+
+    // Barrels built on `export *` hide the public API.
+    "oxc/no-barrel-file": ["error", { "threshold": 0 }],
+
+    "unicorn/filename-case": ["error", { "case": "kebabCase" }],
+    // Every disable directive must name the rule it silences.
+    "unicorn/no-abusive-eslint-disable": "error",
+    "unicorn/catch-error-name": "error",
+    "unicorn/throw-new-error": "error",
+    "unicorn/error-message": "error",
+    "unicorn/prefer-optional-catch-binding": "error",
+    "unicorn/switch-case-braces": "error",
+    "unicorn/prefer-at": "error",
+    "unicorn/prefer-string-slice": "error",
+    "unicorn/prefer-string-replace-all": "error",
+    "unicorn/no-typeof-undefined": "error",
+    "unicorn/prefer-array-some": "error",
+    "unicorn/prefer-date-now": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "unicorn/prefer-export-from": "error",
+    "unicorn/prefer-structured-clone": "error",
+    "unicorn/prefer-global-this": "error",
+    "unicorn/prefer-spread": "error",
+    "unicorn/consistent-function-scoping": "error",
+    "unicorn/numeric-separators-style": "error"
+  }
+}

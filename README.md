@@ -34,11 +34,15 @@ changes code; for PRs, add [`maintenance-updates.yml`](#maintenance-updatesyml) 
   and makes the run red.
 - Only `GITHUB_TOKEN`: the `audit` job runs `pnpm audit` from the lockfile without installing
   or running repo code, and the files are read through the REST API.
+- The sections are built by TypeScript in [`src/dashboard/`](src/dashboard/). The
+  `update-issue` job checks this repo out at the commit you pinned and runs them with Node.js;
+  nothing is installed from npm.
 
 To see the body for a repo without touching its issue, run
 `scripts/dashboard-dry-run.sh owner/repo <commit> <checkout>`.
 
-Assumptions: only the default `catalog:` is read, with a leading `^` or `~` ignored;
+Assumptions: only the default `catalog:` is read, as a flat block of plain or quoted
+`name: version` lines (what pnpm writes), with a leading `^` or `~` ignored;
 `@types/node` is capped at the `.nvmrc` major; the lockfile is version 6 or 9; `.nvmrc` holds an
 exact version; the gitleaks script has a `GITLEAKS_VERSION="x.y.z"` line. The issue body is cut
 to 60,000 characters, and the run summary has the full body.
@@ -47,7 +51,7 @@ to 60,000 characters, and the run summary has the full body.
 
 ```mermaid
 flowchart LR
-    A[audit job:<br>pnpm audit,<br>locked packages] --> B[update-issue job:<br>read files<br>through the API]
+    A[audit job:<br>pnpm audit,<br>locked packages] --> B[update-issue job:<br>check out the scripts,<br>read files through the API]
     B --> C[One step<br>per section] --> D[Title, alerts,<br>table, sections]
     D --> DR{dry-run?}
     DR -- yes --> S[Run summary only]

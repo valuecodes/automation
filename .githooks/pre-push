@@ -1,0 +1,8 @@
+#!/bin/sh
+# Slower checks before every push; pre-commit already ran format and lint.
+# Never bypass with --no-verify: fix the failure instead.
+set -eu
+
+pnpm typecheck
+pnpm test
+pnpm knip

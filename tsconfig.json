@@ -1,0 +1,21 @@
+{
+  // Node runs `src/` directly with its built-in type stripping, so only
+  // erasable syntax is allowed and nothing is emitted; `tsc` is a check.
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "nodenext",
+    "lib": ["ES2024"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}
