@@ -104,7 +104,6 @@ jobs:
           set -euo pipefail
           pnpm lint
 
-
   knip:
     name: knip
     runs-on: ubuntu-latest
@@ -169,8 +168,10 @@ jobs:
     needs:
       [
         format,
+        lint,
         typecheck,
         test,
+        knip,
         workflow-lint,
         maintenance-dashboard,
         maintenance-updates,
