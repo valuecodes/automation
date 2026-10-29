@@ -26,8 +26,13 @@ const api: Api = async <T>(
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   };
-  // Like `gh api`, a 4xx is final and never retried.
-  const response = await request(`${root}/${path}`, init, 3);
+  // Like `gh api`, a 4xx is final. Only reads are retried: a create whose
+  // answer was lost would otherwise be sent again and make a second issue.
+  const response = await request(
+    `${root}/${path}`,
+    init,
+    method === "GET" ? 3 : 0,
+  );
   if (response.status === 204) {
     return undefined as T;
   }

@@ -81,7 +81,7 @@ report() {
 
 # One shell step of the audit job, run in the checkout.
 run_step() {
-  local name=$1 code
+  local name=$1
   step "$name" > "$RUNNER_TEMP/step.sh"
   if [[ ! -s $RUNNER_TEMP/step.sh ]]; then
     echo "::error::Step not found in the workflow: $name" >&2
