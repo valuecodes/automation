@@ -47,12 +47,7 @@ const fetchJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
   return (await response.json()) as T;
 };
 
-const fetchText = async (url: string, init?: RequestInit): Promise<string> => {
-  const response = await request(url, init);
-  return response.text();
-};
-
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-export { HttpError, request, fetchJson, fetchText };
+export { HttpError, request, fetchJson };

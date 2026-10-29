@@ -33,18 +33,18 @@ const dirs = (): Dirs => {
   };
 };
 
-type Context = {
+/** The inputs and repo facts both workflows' jobs get. */
+type Common = {
   repo: string;
-  sha: string;
   /** Path of the caller's workflow file, from `github.workflow_ref`. */
   caller: string;
   runsUrl: string;
   minAgeDays: number;
   gitleaksScript: string;
   dryRun: boolean;
-} & Dirs;
+};
 
-const context = (): Context => {
+const common = (): Common => {
   const repo = env("REPO");
   const serverUrl = env("SERVER_URL");
   // `github.workflow_ref` is `owner/repo/.github/workflows/x.yml@ref`. The
@@ -61,9 +61,7 @@ const context = (): Context => {
     );
   }
   return {
-    ...dirs(),
     repo,
-    sha: env("SHA"),
     caller,
     runsUrl: `${serverUrl}/${repo}/actions/workflows/${caller.replace(/^.*\//, "")}`,
     minAgeDays: Number(minAge),
@@ -71,6 +69,18 @@ const context = (): Context => {
     dryRun: env("DRY_RUN") === "true",
   };
 };
+
+type Context = {
+  sha: string;
+} & Common &
+  Dirs;
+
+/** The dashboard job's context: the common part plus the commit it reads. */
+const context = (): Context => ({
+  ...dirs(),
+  ...common(),
+  sha: env("SHA"),
+});
 
 export { Fail, env, context };
 export type { Context };

@@ -2,13 +2,14 @@
 // summary row holds all there is to say, so the fragment is empty.
 
 import { existsSync, readFileSync } from "node:fs";
+import { readCutoff } from "../lib/cutoff.ts";
 import { context } from "../lib/env.ts";
 import { fetchJson } from "../lib/http.ts";
 import { writeSection } from "../lib/sections.ts";
 import type { Status } from "../lib/sections.ts";
 import { newer } from "../lib/versions.ts";
 import type { Newer, Packument } from "../lib/versions.ts";
-import { FILES, readCutoff, requireSetup } from "./setup.ts";
+import { FILES, requireSetup } from "./setup.ts";
 
 const ID = "30-pnpm";
 

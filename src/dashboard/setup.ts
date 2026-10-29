@@ -1,7 +1,8 @@
 // "Read the repo files at this commit": the files every section reads, the
 // release-age cutoff, and the `.ok` marker the sections require.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { writeCutoff } from "../lib/cutoff.ts";
 import { Fail, context } from "../lib/env.ts";
 import { repoFile } from "../lib/github.ts";
 
@@ -16,8 +17,7 @@ const setup = async (): Promise<void> => {
   const ctx = context();
   mkdirSync(ctx.src, { recursive: true });
   mkdirSync(ctx.sections, { recursive: true });
-  const cutoff = Math.floor(Date.now() / 1000) - ctx.minAgeDays * 86_400;
-  writeFileSync(`${ctx.src}/cutoff`, `${cutoff}\n`);
+  writeCutoff(ctx.src, ctx.minAgeDays);
 
   // A missing file makes its check "not applicable"; other errors fail.
   const fetchInto = async (path: string, dest: string): Promise<void> => {
@@ -44,12 +44,4 @@ const requireSetup = (src: string): void => {
   }
 };
 
-const readCutoff = (src: string): number => {
-  const text = readFileSync(`${src}/cutoff`, "utf8").trim();
-  if (!/^[0-9]+$/.test(text)) {
-    throw new Fail("The cutoff from the setup step is not a number.");
-  }
-  return Number(text);
-};
-
-export { FILES, setup, requireSetup, readCutoff };
+export { FILES, setup, requireSetup };

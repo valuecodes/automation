@@ -3,62 +3,19 @@
 // `20-catalog.rows` so the last step can truncate them.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { Fail, context } from "../lib/env.ts";
 import { warning } from "../lib/actions.ts";
+import { nodeMajor, parseCatalog, parseSpec } from "../lib/catalog.ts";
+import { readCutoff } from "../lib/cutoff.ts";
+import { context } from "../lib/env.ts";
 import { esc, plural } from "../lib/markdown.ts";
 import { NAME, downloadPackuments, readPackument } from "../lib/npm.ts";
 import { writeSection } from "../lib/sections.ts";
 import type { Status } from "../lib/sections.ts";
-import { EXACT, newer } from "../lib/versions.ts";
+import { newer } from "../lib/versions.ts";
 import type { Newer } from "../lib/versions.ts";
-import { FILES, readCutoff, requireSetup } from "./setup.ts";
+import { FILES, requireSetup } from "./setup.ts";
 
 const ID = "20-catalog";
-
-/**
- * The `catalog:` block of `pnpm-workspace.yaml`. The file is read without a
- * YAML parser, so the block must be a flat mapping of plain or quoted
- * scalars, which is what pnpm writes; anything else fails the check.
- */
-const parseCatalog = (yaml: string): Map<string, string> => {
-  const entries = new Map<string, string>();
-  const lines = yaml.split("\n");
-  const start = lines.findIndex(
-    (l) =>
-      /^catalog:\s*(#.*)?$/.test(l) || /^catalog:\s*\{\s*\}\s*(#.*)?$/.test(l),
-  );
-  if (start === -1 || (lines[start] ?? "").includes("{")) {
-    return entries;
-  }
-  for (const line of lines.slice(start + 1)) {
-    if (/^\s*(#.*)?$/.test(line)) {
-      continue;
-    }
-    if (!/^\s/.test(line)) {
-      break;
-    }
-    const m =
-      /^\s+(?:"([^"]*)"|'([^']*)'|([^\s"'#][^:]*?))\s*:\s*(?:"([^"]*)"|'([^']*)'|([^\s#][^#]*?))\s*(#.*)?$/.exec(
-        line,
-      );
-    if (m === null) {
-      throw new Fail(
-        `Cannot read this line of the catalog in pnpm-workspace.yaml: ${line.trim()}`,
-      );
-    }
-    entries.set(m[1] ?? m[2] ?? m[3] ?? "", m[4] ?? m[5] ?? m[6] ?? "");
-  }
-  return entries;
-};
-
-/** The `.nvmrc` major, which caps `@types/node`. */
-const nodeMajor = (nvmrc: string | null): number | null => {
-  if (nvmrc === null) {
-    return null;
-  }
-  const m = /^([0-9]+)\./.exec(nvmrc.replaceAll(/\s/g, "").replace(/^v/, ""));
-  return m === null ? null : Number(m[1]);
-};
 
 type Row = Newer | { name: string; current: string; unparsed: true };
 
@@ -225,14 +182,14 @@ const catalog = async (): Promise<void> => {
   );
   const cutoff = readCutoff(ctx.src);
   const rows: Row[] = entries.map(([name, spec]) => {
-    const current = spec.replace(/^[\^~]/, "");
-    if (!EXACT.test(current)) {
+    const parsed = parseSpec(spec);
+    if (parsed === null) {
       return { name, current: spec, unparsed: true };
     }
     return newer(
       readPackument(ctx.npm, name),
       name,
-      current,
+      parsed.current,
       cutoff,
       name === "@types/node" ? major : null,
     );
@@ -249,5 +206,5 @@ const catalog = async (): Promise<void> => {
   writeSection(ctx.sections, ID, rendered.markdown, rendered.status);
 };
 
-export { ID, parseCatalog, nodeMajor, isUnparsed, tableRows, render, catalog };
+export { ID, isUnparsed, tableRows, render, catalog };
 export type { Row };

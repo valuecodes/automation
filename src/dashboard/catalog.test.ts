@@ -1,40 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { nodeMajor, parseCatalog, render, tableRows } from "./catalog.ts";
+import { render, tableRows } from "./catalog.ts";
 import type { Row } from "./catalog.ts";
-
-test("parseCatalog reads plain and quoted entries and stops at the block end", () => {
-  const yaml = [
-    "# header",
-    "catalog:",
-    "  '@types/node': 26.6.5",
-    '  "oxfmt": "0.72.0" # pinned',
-    "",
-    "  typescript: ^7.0.2",
-    "catalogMode: strict",
-    "  not: here",
-  ].join("\n");
-  assert.deepEqual(
-    [...parseCatalog(yaml)],
-    [
-      ["@types/node", "26.6.5"],
-      ["oxfmt", "0.72.0"],
-      ["typescript", "^7.0.2"],
-    ],
-  );
-  assert.equal(parseCatalog("packages:\n  - apps/*\n").size, 0);
-  assert.equal(parseCatalog("catalog: {}\n").size, 0);
-  assert.throws(
-    () => parseCatalog("catalog:\n  nested:\n    a: 1\n"),
-    /Cannot read/,
-  );
-});
-
-test("nodeMajor reads .nvmrc", () => {
-  assert.equal(nodeMajor("v26.12.1\n"), 26);
-  assert.equal(nodeMajor("lts/*"), null);
-  assert.equal(nodeMajor(null), null);
-});
 
 const outdated: Row = {
   name: "a",
