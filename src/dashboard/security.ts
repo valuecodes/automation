@@ -50,6 +50,23 @@ const describePath = (path: string): string => {
   return `${head}${parts.slice(1).join(" > ")}${direct}`;
 };
 
+const ADVISORY_ID = /^[A-Za-z0-9._-]+$/;
+const ADVISORY_URL = /^https:\/\/[^\s()<>]+$/;
+
+/**
+ * The advisory as a link, or its id as plain text when the id or URL from the
+ * audit output could not sit inside a Markdown link.
+ */
+const advisoryLink = (
+  id: string | number | null | undefined,
+  url: string | undefined,
+): string => {
+  const label = id === null || id === undefined ? "" : String(id);
+  return ADVISORY_ID.test(label) && url !== undefined && ADVISORY_URL.test(url)
+    ? `[${label}](${url})`
+    : esc(label);
+};
+
 type Row = {
   rank: number;
   severity: string;
@@ -80,7 +97,7 @@ const rows = (audit: Audit): Row[] =>
       path:
         describePath(paths[0] ?? "?") +
         (paths.length > 1 ? ` (+${paths.length - 1} more)` : ""),
-      link: `[${a.github_advisory_id ?? a.id}](${a.url})`,
+      link: advisoryLink(a.github_advisory_id ?? a.id, a.url),
     };
   });
 

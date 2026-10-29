@@ -42,6 +42,39 @@ test("table groups advisories that one update clears and sorts by severity", () 
   assert.equal(breakdown(audit), "1 critical, 1 high, 1 moderate");
 });
 
+test("table links an advisory only when its id and URL fit a Markdown link", () => {
+  const odd: Audit = {
+    advisories: {
+      "1": {
+        severity: "low",
+        module_name: "a",
+        github_advisory_id: "GHSA-x",
+        url: "javascript:alert(1)",
+        findings: [{ version: "1.0.0", paths: [".>a"] }],
+      },
+      "2": {
+        severity: "low",
+        module_name: "b",
+        github_advisory_id: "GHSA-y",
+        url: "https://example.test/x)[evil](https://evil.test",
+        findings: [{ version: "1.0.0", paths: [".>b"] }],
+      },
+      "3": {
+        severity: "low",
+        module_name: "c",
+        github_advisory_id: "](https://evil.test)|",
+        url: "https://github.com/advisories/GHSA-z",
+        findings: [{ version: "1.0.0", paths: [".>c"] }],
+      },
+    },
+  };
+  assert.deepEqual(table(odd), [
+    "| ⬜ low | `a` 1.0.0 | none | a (direct) | GHSA-x |",
+    "| ⬜ low | `b` 1.0.0 | none | b (direct) | GHSA-y |",
+    "| ⬜ low | `c` 1.0.0 | none | c (direct) | ](https://evil.test)\\| |",
+  ]);
+});
+
 test("render covers every audit status", () => {
   assert.deepEqual(render("skipped: no pnpm-lock.yaml", null, "u").status, {
     state: "na",

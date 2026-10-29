@@ -182,6 +182,26 @@ jobs:
           set -euo pipefail
           "$AUTOMATION_NODE" .automation/src/updates/main.ts resolve
 
+      # The resolve step ran the caller's pnpm in the caller's tree without a
+      # token, and the steps after it run with the write token from the
+      # scripts checkout, so that checkout must still be the pinned commit.
+      # This is a sanity check, not a security boundary: a process that can
+      # edit the checkout can defeat a git check too, and getting code to run
+      # in that step already takes commit access to the caller's default
+      # branch. `--really-refresh` ignores the assume-unchanged bit.
+      - name: Check that the update steps are still the pinned commit
+        env:
+          SHA: ${{ steps.self.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git -C .automation update-index --really-refresh -q >/dev/null || true
+          head=$(git -C .automation rev-parse HEAD)
+          changed=$(git -C .automation status --porcelain --untracked-files=all)
+          if [[ $head != "$SHA" || -n $changed ]]; then
+            echo "::error::The checkout of the update steps (.automation) changed after it was made (HEAD $head, pinned $SHA${changed:+, changed files: $changed}), so the steps that hold the token did not run."
+            exit 1
+          fi
+
       # The OpenSSF malicious-packages feed on osv.dev, for every npm version
       # an update adds (the pnpm target, or each new locked version). A hit
       # blocks the update and closes its open PR.
