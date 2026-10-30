@@ -153,7 +153,7 @@ through `workflow-lint.yml`, and calls `maintenance-dashboard.yml` with `dry-run
 - Keep diffs tight and focused; no drive-by refactors or new tooling without discussion.
 - Never commit secrets or credentials. The repo is public and MIT licensed.
 - Every external npm version lives in the `catalog:` block of `pnpm-workspace.yaml`, saved
-  exact (`.npmrc`). Every install enforces `minimumReleaseAge` (14 days) and
+  exact (`saveExact`). Every install enforces `minimumReleaseAge` (14 days) and
   `trustPolicy: no-downgrade`. When one fails, investigate: never disable it, and never
   exclude a whole package to get past it.
 - Pushing a change under `.github/workflows/` over HTTPS needs a token with the Workflows

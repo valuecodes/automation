@@ -14,6 +14,10 @@ catalog:
 # guardrail, not a CI check.
 catalogMode: strict
 
+# Writes exact versions (no `^` or `~`) on `pnpm add`. pnpm 12 reads only
+# auth settings from `.npmrc`, so this has to live here.
+saveExact: true
+
 # Makes the `engines.node` range in `package.json` fail the install instead
 # of warning, so a wrong Node.js is caught before anything runs.
 engineStrict: true
