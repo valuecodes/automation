@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the steps of .github/workflows/maintenance-dashboard.yml here, in
+# Runs the steps of .github/workflows/dashboard.yml here, in
 # order and with dry-run on, and prints the dashboard title and body: the
 # audit job's steps in the checkout, then the section steps, all from
 # src/dashboard/ with the local Node.js. CI runs the dashboard in dry-run
@@ -41,7 +41,7 @@ if [[ $(git -C "$checkout" rev-parse HEAD) != "$SHA"* ]]; then
 fi
 export SERVER_URL=https://github.com
 export RUN_ID=0
-export WORKFLOW_REF="$REPO/.github/workflows/maintenance-dashboard.yml@refs/heads/local"
+export WORKFLOW_REF="$REPO/.github/workflows/dashboard.yml@refs/heads/local"
 export MIN_AGE_DAYS=14
 export DRY_RUN=true
 

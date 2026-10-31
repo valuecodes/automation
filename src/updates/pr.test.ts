@@ -25,7 +25,7 @@ test("label, commitMessage and modeOk", () => {
   assert.equal(label("pnpm"), "pnpm");
   assert.equal(
     commitMessage("Update Node.js to 26.12.3", "node"),
-    "chore: update Node.js to 26.12.3\n\nMaintenance-Updates: node",
+    "chore: update Node.js to 26.12.3\n\nMaintain-Kit-Updates:node",
   );
   assert.equal(modeOk("100644"), true);
   assert.equal(modeOk("100755"), true);
@@ -36,7 +36,7 @@ test("body adds the notes and a marker that ignores the date", () => {
   const a = body("t", "content", input);
   const b = body("t", "content", { ...input, date: "2027-01-01" });
   assert.equal(a.marker, b.marker);
-  assert.match(a.marker, /^<!-- maintenance-updates:[0-9a-f]{64} -->$/);
+  assert.match(a.marker, /^<!-- maintain-kit-updates:[0-9a-f]{64} -->$/);
   assert.match(
     a.content,
     /^content\n\nCI runs through `workflow_dispatch` of `ci\.yml`/,
@@ -44,7 +44,7 @@ test("body adds the notes and a marker that ignores the date", () => {
   assert.match(a.content, /\n\nDashboard: #12$/);
   assert.equal(
     a.body,
-    `${a.content}\n\n---\nLast changed: 2026-10-29 · [Workflow runs](https://runs) · Source: [valuecodes/automation](https://github.com/valuecodes/automation)\n\n${a.note}\n${a.marker}\n`,
+    `${a.content}\n\n---\nLast changed: 2026-10-29 · [Workflow runs](https://runs) · Source: [valuecodes/maintain-kit](https://github.com/valuecodes/maintain-kit)\n\n${a.note}\n${a.marker}\n`,
   );
   const plain = body("t", "content", {
     ...input,
@@ -72,7 +72,7 @@ test("unchanged compares title, content, footer and marker", () => {
 test("ours needs the bot author and the trailer on every commit", () => {
   const good = {
     author: { login: BOT },
-    commit: { message: "chore: x\n\nMaintenance-Updates: node" },
+    commit: { message: "chore: x\n\nMaintain-Kit-Updates:node" },
   };
   assert.equal(ours({ total_commits: 1, commits: [good] }, "node"), true);
   assert.equal(ours({ total_commits: 1, commits: [good] }, "pnpm"), false);
@@ -126,7 +126,7 @@ const fakeApi = (f: Fake): { api: Api; calls: string[] } => {
         commits: [
           {
             author: { login: f.ours === false ? "human" : BOT },
-            commit: { message: "chore: x\n\nMaintenance-Updates: node" },
+            commit: { message: "chore: x\n\nMaintain-Kit-Updates:node" },
           },
         ],
       });
@@ -241,16 +241,16 @@ test("publish creates the commit, branch, label, PR and CI run", async () => {
       "POST repos/o/r/git/commits",
       "POST repos/o/r/git/refs",
       "POST repos/o/r/labels",
-      "PATCH repos/o/r/labels/maintenance-updates",
+      "PATCH repos/o/r/labels/maintain-kit-updates",
       "POST repos/o/r/pulls",
       "POST repos/o/r/issues/9/labels",
       "POST repos/o/r/actions/workflows/ci.yml/dispatches",
     ],
   );
   assert.deepEqual(logs, [
-    "Pushed commit1 to maintenance-updates/node.",
+    "Pushed commit1 to maintain-kit/node.",
     "Opened https://pr/9.",
-    "Started ci.yml on maintenance-updates/node.",
+    "Started ci.yml on maintain-kit/node.",
   ]);
 });
 
@@ -279,20 +279,15 @@ test("publish leaves an unchanged PR alone and edits a changed one", async () =>
     [],
   );
   assert.deepEqual(same.logs, [
-    "maintenance-updates/node already holds this update.",
+    "maintain-kit/node already holds this update.",
     "PR #4 is unchanged.",
   ]);
   const stale = await run({ pr: { ...pr, body: "old" }, tip: "tip" }, false);
   assert.ok(
-    stale.calls.includes(
-      "PATCH repos/o/r/git/refs/heads/maintenance-updates/node",
-    ),
+    stale.calls.includes("PATCH repos/o/r/git/refs/heads/maintain-kit/node"),
   );
   assert.ok(stale.calls.includes("PATCH repos/o/r/pulls/4"));
-  assert.equal(
-    stale.logs.at(-1),
-    "Started ci.yml on maintenance-updates/node.",
-  );
+  assert.equal(stale.logs.at(-1), "Started ci.yml on maintain-kit/node.");
   // A fork's PR on the same branch name is not ours to edit.
   const fork = await run(
     {
@@ -377,7 +372,7 @@ test("when nothing is due, this workflow's PR is closed and its branch deleted",
     [
       "POST repos/o/r/issues/4/comments",
       "PATCH repos/o/r/pulls/4",
-      "DELETE repos/o/r/git/refs/heads/maintenance-updates/node",
+      "DELETE repos/o/r/git/refs/heads/maintain-kit/node",
     ],
   );
   assert.deepEqual(closed.logs, ["Closed #4: Node.js 26.12.1 is up to date."]);
@@ -385,7 +380,7 @@ test("when nothing is due, this workflow's PR is closed and its branch deleted",
   const orphan = await run({ tip: "tip" }, false, current);
   assert.deepEqual(
     orphan.calls.filter((c) => !c.startsWith("GET")),
-    ["DELETE repos/o/r/git/refs/heads/maintenance-updates/node"],
+    ["DELETE repos/o/r/git/refs/heads/maintain-kit/node"],
   );
   const dry = await run({ pr, tip: "tip" }, true, current);
   assert.deepEqual(
@@ -393,7 +388,7 @@ test("when nothing is due, this workflow's PR is closed and its branch deleted",
     [],
   );
   assert.deepEqual(dry.logs, [
-    "Dry run: would close #4 and delete maintenance-updates/node.",
+    "Dry run: would close #4 and delete maintain-kit/node.",
   ]);
   const theirs = await run({ pr, tip: "tip", ours: false }, false, current);
   assert.deepEqual(

@@ -4,7 +4,7 @@ name: Workflow lint
 # shellcheck on the `run:` scripts) and zizmor. Both read the caller's own
 # `.github/actionlint.yaml` and `zizmor.yml` when present. Uses only
 # `GITHUB_TOKEN` with `contents: read`. Other repos call it with
-# `uses: valuecodes/automation/.github/workflows/workflow-lint.yml@<sha>`.
+# `uses: valuecodes/maintain-kit/.github/workflows/workflow-lint.yml@<sha>`.
 
 on:
   workflow_call:

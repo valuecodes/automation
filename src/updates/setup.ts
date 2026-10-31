@@ -60,7 +60,7 @@ const setup = async (api: Api = githubApi): Promise<void> => {
   try {
     const issues = await api<Issue[]>(
       "GET",
-      `repos/${ctx.repo}/issues?labels=maintenance-dashboard&state=open&per_page=100`,
+      `repos/${ctx.repo}/issues?labels=maintain-kit-dashboard&state=open&per_page=100`,
     );
     const numbers = issues
       .filter((i) => i.pull_request === undefined)
@@ -74,7 +74,7 @@ const setup = async (api: Api = githubApi): Promise<void> => {
   // The caller's own Node.js may replace this one on PATH later in the job
   // (the lockfile setup), so the steps after that run with this one, which
   // strips types.
-  appendRunnerFile("GITHUB_ENV", `AUTOMATION_NODE=${process.execPath}\n`);
+  appendRunnerFile("GITHUB_ENV", `MAINTAIN_KIT_NODE=${process.execPath}\n`);
   writeCutoff(ctx.src, ctx.minAgeDays);
 
   // As in the dashboard: a missing file makes its kind "not applicable".

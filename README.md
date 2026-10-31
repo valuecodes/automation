@@ -1,15 +1,16 @@
-# automation
+# maintain-kit
 
-Reusable GitHub Actions workflows. Callers pin a full commit SHA of this
+Reusable GitHub Actions workflows that keep a repo's dependencies, tools and history in
+order: a maintenance dashboard issue, update PRs, workflow linting and a secret scan. Callers pin a full commit SHA of this
 repo, never `@main`, so a change here never reaches a caller until it is re-pinned.
 
 The actions these workflows use are pinned by SHA too. Dependabot proposes one grouped PR a
 month for releases at least 14 days old; callers get those bumps only when they re-pin.
 
-## `maintenance-dashboard.yml`
+## `dashboard.yml`
 
-Keeps one issue per repo (label `maintenance-dashboard`) that lists what is due. It never
-changes code; for PRs, add [`maintenance-updates.yml`](#maintenance-updatesyml) too.
+Keeps one issue per repo (label `maintain-kit-dashboard`) that lists what is due. It never
+changes code; for PRs, add [`updates.yml`](#updatesyml) too.
 
 | Check        | Source                                   | Shows                                                      |
 | ------------ | ---------------------------------------- | ---------------------------------------------------------- |
@@ -72,18 +73,18 @@ flowchart LR
 2. After the first run, pin the issue it created so it stays at the top of the issue list.
 
 ```yaml
-name: Maintenance dashboard
+name: Dashboard
 on:
   schedule:
     - cron: "41 5 * * *"
   workflow_dispatch:
 permissions: {}
 jobs:
-  maintenance-dashboard:
+  dashboard:
     permissions:
       contents: read
       issues: write
-    uses: valuecodes/automation/.github/workflows/maintenance-dashboard.yml@<full-commit-sha>
+    uses: valuecodes/maintain-kit/.github/workflows/dashboard.yml@<full-commit-sha>
 ```
 
 Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
@@ -97,9 +98,9 @@ Inputs:
   The caller must still grant `issues: write`, because a called workflow's job permissions are
   checked against the caller's before anything runs.
 
-## `maintenance-updates.yml`
+## `updates.yml`
 
-Keeps one PR per kind open, on the branch `maintenance-updates/<kind>`, for the updates the
+Keeps one PR per kind open, on the branch `maintain-kit/<kind>`, for the updates the
 dashboard lists on the current major. Each kind is its own job, so a failure names its cause.
 
 | Kind (job) | Changes                                                                       |
@@ -150,7 +151,7 @@ secrets, since it runs the new versions.
 - The workflow sees no caller secrets. It declares none, and `secrets: inherit` is not
   needed. The caller's `GITHUB_TOKEN` is the only credential; it is present only on the steps
   that call the API, and the step that runs pnpm in the caller's checkout has none.
-- With the four permissions, the token can push to `maintenance-updates/*` branches, open,
+- With the four permissions, the token can push to `maintain-kit/*` branches, open,
   edit and close those PRs, and start `ci-workflow` by `workflow_dispatch`. It cannot change
   `.github/workflows/` and cannot bypass branch protection.
 - A run on an update branch gets whatever secrets its workflow can reach: the dispatched
@@ -193,20 +194,20 @@ summary.
 3. Give the CI workflow named in `ci-workflow` an `on: workflow_dispatch:` trigger.
 
 ```yaml
-name: Maintenance updates
+name: Updates
 on:
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
 permissions: {}
 jobs:
-  maintenance-updates:
+  updates:
     permissions:
       contents: write # push the update branches
       pull-requests: write # open, edit and close the PRs
       actions: write # start ci-workflow on the branches
       issues: read # link the dashboard issue
-    uses: valuecodes/automation/.github/workflows/maintenance-updates.yml@<full-commit-sha>
+    uses: valuecodes/maintain-kit/.github/workflows/updates.yml@<full-commit-sha>
     with:
       ci-workflow: ci.yml
 ```
@@ -247,7 +248,7 @@ jobs:
   workflow-lint:
     permissions:
       contents: read
-    uses: valuecodes/automation/.github/workflows/workflow-lint.yml@<full-commit-sha>
+    uses: valuecodes/maintain-kit/.github/workflows/workflow-lint.yml@<full-commit-sha>
 ```
 
 Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
@@ -273,7 +274,7 @@ jobs:
   secret-scan:
     permissions:
       contents: read
-    uses: valuecodes/automation/.github/workflows/secret-scan.yml@<full-commit-sha>
+    uses: valuecodes/maintain-kit/.github/workflows/secret-scan.yml@<full-commit-sha>
 ```
 
 Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.

@@ -140,11 +140,11 @@ jobs:
   # the run summary and touches no issue; `issues: write` is still needed
   # because a called job's permissions are checked against the caller's. A
   # failed check (including an npm or osv.dev outage) makes this red on purpose.
-  maintenance-dashboard:
+  dashboard:
     permissions:
       contents: read
       issues: write
-    uses: ./.github/workflows/maintenance-dashboard.yml # zizmor: ignore[self-repository]
+    uses: ./.github/workflows/dashboard.yml # zizmor: ignore[self-repository]
     with:
       dry-run: true
 
@@ -153,13 +153,13 @@ jobs:
   # are checked against the called jobs' permissions, as above, so this job
   # holds write scopes it never uses; every write in the workflow sits behind
   # `dry-run`. PRs from forks get a read-only token anyway.
-  maintenance-updates:
+  updates:
     permissions:
       contents: write
       pull-requests: write
       actions: write
       issues: read
-    uses: ./.github/workflows/maintenance-updates.yml # zizmor: ignore[self-repository]
+    uses: ./.github/workflows/updates.yml # zizmor: ignore[self-repository]
     with:
       dry-run: true
 
@@ -179,8 +179,8 @@ jobs:
         knip,
         secrets-scan,
         workflow-lint,
-        maintenance-dashboard,
-        maintenance-updates,
+        dashboard,
+        updates,
       ]
     permissions: {}
     steps:
