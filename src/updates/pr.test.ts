@@ -25,7 +25,7 @@ test("label, commitMessage and modeOk", () => {
   assert.equal(label("pnpm"), "pnpm");
   assert.equal(
     commitMessage("Update Node.js to 26.12.3", "node"),
-    "chore: update Node.js to 26.12.3\n\nMaintain-Kit-Updates:node",
+    "chore: update Node.js to 26.12.3\n\nMaintain-Kit-Updates: node",
   );
   assert.equal(modeOk("100644"), true);
   assert.equal(modeOk("100755"), true);
@@ -72,7 +72,7 @@ test("unchanged compares title, content, footer and marker", () => {
 test("ours needs the bot author and the trailer on every commit", () => {
   const good = {
     author: { login: BOT },
-    commit: { message: "chore: x\n\nMaintain-Kit-Updates:node" },
+    commit: { message: "chore: x\n\nMaintain-Kit-Updates: node" },
   };
   assert.equal(ours({ total_commits: 1, commits: [good] }, "node"), true);
   assert.equal(ours({ total_commits: 1, commits: [good] }, "pnpm"), false);
@@ -126,7 +126,7 @@ const fakeApi = (f: Fake): { api: Api; calls: string[] } => {
         commits: [
           {
             author: { login: f.ours === false ? "human" : BOT },
-            commit: { message: "chore: x\n\nMaintain-Kit-Updates:node" },
+            commit: { message: "chore: x\n\nMaintain-Kit-Updates: node" },
           },
         ],
       });

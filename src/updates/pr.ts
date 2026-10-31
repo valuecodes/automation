@@ -34,7 +34,7 @@ const label = (kind: Kind): string =>
 /** The PR title is a plain sentence; the commit follows the
  * `<type>: <subject>` convention, with the trailer `ours` checks. */
 const commitMessage = (title: string, kind: Kind): string =>
-  `chore: ${title.charAt(0).toLowerCase()}${title.slice(1)}\n\nMaintain-Kit-Updates:${kind}`;
+  `chore: ${title.charAt(0).toLowerCase()}${title.slice(1)}\n\nMaintain-Kit-Updates: ${kind}`;
 
 type BodyInput = {
   ciWorkflow: string;
@@ -126,7 +126,7 @@ const ours = (compare: Compare, kind: Kind): boolean => {
       c.author?.login === BOT &&
       (c.commit?.message ?? "")
         .split("\n")
-        .includes(`Maintain-Kit-Updates:${kind}`),
+        .includes(`Maintain-Kit-Updates: ${kind}`),
   );
 };
 
