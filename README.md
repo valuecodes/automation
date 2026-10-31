@@ -73,14 +73,14 @@ flowchart LR
 2. After the first run, pin the issue it created so it stays at the top of the issue list.
 
 ```yaml
-name: Dashboard
+name: Maintain-kit dashboard
 on:
   schedule:
     - cron: "41 5 * * *"
   workflow_dispatch:
 permissions: {}
 jobs:
-  dashboard:
+  maintain-kit-dashboard:
     permissions:
       contents: read
       issues: write
@@ -194,14 +194,14 @@ summary.
 3. Give the CI workflow named in `ci-workflow` an `on: workflow_dispatch:` trigger.
 
 ```yaml
-name: Updates
+name: Maintain-kit updates
 on:
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
 permissions: {}
 jobs:
-  updates:
+  maintain-kit-updates:
     permissions:
       contents: write # push the update branches
       pull-requests: write # open, edit and close the PRs

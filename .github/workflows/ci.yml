@@ -140,7 +140,7 @@ jobs:
   # the run summary and touches no issue; `issues: write` is still needed
   # because a called job's permissions are checked against the caller's. A
   # failed check (including an npm or osv.dev outage) makes this red on purpose.
-  dashboard:
+  maintain-kit-dashboard:
     permissions:
       contents: read
       issues: write
@@ -153,7 +153,7 @@ jobs:
   # are checked against the called jobs' permissions, as above, so this job
   # holds write scopes it never uses; every write in the workflow sits behind
   # `dry-run`. PRs from forks get a read-only token anyway.
-  updates:
+  maintain-kit-updates:
     permissions:
       contents: write
       pull-requests: write
@@ -179,8 +179,8 @@ jobs:
         knip,
         secret-scan,
         workflow-lint,
-        dashboard,
-        updates,
+        maintain-kit-dashboard,
+        maintain-kit-updates,
       ]
     permissions: {}
     steps:
