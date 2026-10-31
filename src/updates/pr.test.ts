@@ -202,7 +202,6 @@ const fixture = (
     caller: input.caller,
     runsUrl: input.runsUrl,
     minAgeDays: 14,
-    gitleaksScript: "",
     dryRun,
     kind: "node",
     ciWorkflow: "ci.yml",

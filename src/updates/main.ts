@@ -6,7 +6,6 @@
 import { error as annotate } from "../lib/actions.ts";
 import { Fail } from "../lib/env.ts";
 import { catalog } from "./catalog.ts";
-import { gitleaks } from "./gitleaks.ts";
 import { node } from "./node.ts";
 import { osv } from "./osv.ts";
 import { pnpm } from "./pnpm.ts";
@@ -18,7 +17,6 @@ const steps: Record<string, () => Promise<void>> = {
   setup: () => setup(),
   node,
   pnpm,
-  gitleaks: () => gitleaks(),
   catalog,
   resolve,
   osv,

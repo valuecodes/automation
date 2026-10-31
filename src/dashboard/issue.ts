@@ -24,7 +24,6 @@ const SECTIONS = [
   "15-supply-chain",
   "20-catalog",
   "30-pnpm",
-  "40-gitleaks",
   "50-node",
 ] as const;
 

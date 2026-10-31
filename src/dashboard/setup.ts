@@ -10,7 +10,6 @@ const FILES = {
   workspace: "pnpm-workspace.yaml",
   packageJson: "package.json",
   nvmrc: ".nvmrc",
-  gitleaksScript: "gitleaks-script",
 } as const;
 
 const setup = async (): Promise<void> => {
@@ -31,9 +30,6 @@ const setup = async (): Promise<void> => {
   await fetchInto("pnpm-workspace.yaml", FILES.workspace);
   await fetchInto("package.json", FILES.packageJson);
   await fetchInto(".nvmrc", FILES.nvmrc);
-  if (ctx.gitleaksScript !== "") {
-    await fetchInto(ctx.gitleaksScript, FILES.gitleaksScript);
-  }
   writeFileSync(`${ctx.src}/.ok`, "");
 };
 

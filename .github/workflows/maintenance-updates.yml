@@ -1,9 +1,9 @@
 name: Maintenance updates
 
 # Keeps one PR per update kind open in the calling repo, on the branch
-# `maintenance-updates/<kind>`: Node.js (`.nvmrc`), pnpm (`packageManager`),
-# gitleaks (`GITLEAKS_VERSION` and `GITLEAKS_DIGEST`) and the `catalog:` in
-# `pnpm-workspace.yaml` with its lockfile. Only updates on the current major are
+# `maintenance-updates/<kind>`: Node.js (`.nvmrc`), pnpm (`packageManager`)
+# and the `catalog:` in `pnpm-workspace.yaml` with its lockfile. Only updates
+# on the current major are
 # proposed; majors stay on the maintenance dashboard. Every run recomputes each
 # update from the default branch and updates its PR in place, or closes it when
 # nothing is due any more. Uses only `GITHUB_TOKEN`: commits are made through
@@ -17,13 +17,9 @@ on:
   workflow_call:
     inputs:
       min-release-age-days:
-        description: Minimum age of a proposed release (npm, pnpm, gitleaks, Node.js).
+        description: Minimum age of a proposed release (npm, pnpm, Node.js).
         type: number
         default: 14
-      gitleaks-script:
-        description: File holding `GITLEAKS_VERSION="x.y.z"`. Empty skips gitleaks.
-        type: string
-        default: .github/scripts/secrets-scan.sh
       ci-workflow:
         description: Workflow file to start on each pushed update branch (needs `workflow_dispatch`). Empty starts none.
         type: string
@@ -43,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kind: [node, pnpm, gitleaks, catalog]
+        kind: [node, pnpm, catalog]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -64,7 +60,6 @@ jobs:
       WORKFLOW_REF: ${{ github.workflow_ref }}
       KIND: ${{ matrix.kind }}
       MIN_AGE_DAYS: ${{ inputs.min-release-age-days }}
-      GITLEAKS_SCRIPT: ${{ inputs.gitleaks-script }}
       CI_WORKFLOW: ${{ inputs.ci-workflow }}
       DRY_RUN: ${{ inputs.dry-run }}
       # The caller's checkout for the lockfile, in a subdirectory: a checkout
@@ -131,14 +126,6 @@ jobs:
         run: |
           set -euo pipefail
           node .automation/src/updates/main.ts pnpm
-
-      - name: "gitleaks: find the update"
-        if: matrix.kind == 'gitleaks'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          node .automation/src/updates/main.ts gitleaks
 
       - name: "Dependencies: pick the updates"
         if: matrix.kind == 'catalog'

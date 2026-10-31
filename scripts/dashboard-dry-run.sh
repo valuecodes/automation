@@ -11,7 +11,7 @@
 # Defaults to this repo at the commit checked out here. The commit must exist
 # on GitHub, because the steps read files through the API; the checkout is
 # only used for the audit job (`pnpm audit` and the lockfile listing). The
-# inputs are fixed to their defaults (14 days, `.github/scripts/secrets-scan.sh`).
+# inputs are fixed to their defaults (14 days).
 # Needs gh (logged in), pnpm, curl and the Node.js in .nvmrc. Talks to the
 # real registries and osv.dev, never touches an issue. The body lands in
 # tmp/dashboard/<owner>-<repo>/dashboard.md (ignored by git) next to the
@@ -43,7 +43,6 @@ export SERVER_URL=https://github.com
 export RUN_ID=0
 export WORKFLOW_REF="$REPO/.github/workflows/maintenance-dashboard.yml@refs/heads/local"
 export MIN_AGE_DAYS=14
-export GITLEAKS_SCRIPT=.github/scripts/secrets-scan.sh
 export DRY_RUN=true
 
 # The files the runner gives a job; the steps append to them like on CI.
@@ -80,7 +79,7 @@ run_step lockfile "$checkout"
 if grep -q '^pnpm=true' "$GITHUB_OUTPUT"; then
   run_step audit "$checkout"
 fi
-for name in setup security catalog supply-chain pnpm gitleaks node issue; do
+for name in setup security catalog supply-chain pnpm node issue; do
   run_step "$name" "$root"
 done
 

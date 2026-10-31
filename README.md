@@ -17,7 +17,6 @@ changes code; for PRs, add [`maintenance-updates.yml`](#maintenance-updatesyml) 
 | Supply chain | [osv.dev](https://osv.dev), npm registry | Malicious versions; signs of a hijacked account on updates |
 | Dependencies | `catalog:` in `pnpm-workspace.yaml`      | Newer versions; ⚠️ marks a new major                       |
 | pnpm         | `packageManager` in `package.json`       | Newer pnpm                                                 |
-| gitleaks     | `GITLEAKS_VERSION` in the secrets script | Newer gitleaks                                             |
 | Node.js      | `.nvmrc`                                 | Newer release on the major, its end of life, newer LTS     |
 
 - A release is listed once it is `min-release-age-days` old (default 14), never a prerelease.
@@ -49,8 +48,8 @@ To see the body for a repo without touching its issue, run
 Assumptions: only the default `catalog:` is read, as a flat block of plain or quoted
 `name: version` lines (what pnpm writes), with a leading `^` or `~` ignored;
 `@types/node` is capped at the `.nvmrc` major; the lockfile is version 6 or 9; `.nvmrc` holds an
-exact version; the gitleaks script has a `GITLEAKS_VERSION="x.y.z"` line. The issue body is cut
-to 60,000 characters, and the run summary has the full body.
+exact version. The issue body is cut to 60,000 characters, and the run summary has the full
+body.
 
 ### How a run decides
 
@@ -92,8 +91,6 @@ Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
 Inputs:
 
 - `min-release-age-days` (number, default `14`).
-- `gitleaks-script` (string, default `.github/scripts/secrets-scan.sh`; empty skips the gitleaks
-  check).
 - `dry-run` (boolean, default `false`): builds the title and body and writes them to the run
   summary, but never creates the label or creates or edits the issue. Use it to try the workflow
   on a repo, or to test a change here against a real repo; this repo's CI does that on every PR.
@@ -105,12 +102,11 @@ Inputs:
 Keeps one PR per kind open, on the branch `maintenance-updates/<kind>`, for the updates the
 dashboard lists on the current major. Each kind is its own job, so a failure names its cause.
 
-| Kind (job) | Changes                                                                        |
-| ---------- | ------------------------------------------------------------------------------ |
-| `node`     | `.nvmrc`                                                                       |
-| `pnpm`     | `packageManager` and its `+sha512` hash, and the pnpm pin in `pnpm-lock.yaml`  |
-| `gitleaks` | `GITLEAKS_VERSION`, and `GITLEAKS_DIGEST` from ghcr.io when the script pins it |
-| `catalog`  | `catalog:` entries in `pnpm-workspace.yaml`, and `pnpm-lock.yaml` to match     |
+| Kind (job) | Changes                                                                       |
+| ---------- | ----------------------------------------------------------------------------- |
+| `node`     | `.nvmrc`                                                                      |
+| `pnpm`     | `packageManager` and its `+sha512` hash, and the pnpm pin in `pnpm-lock.yaml` |
+| `catalog`  | `catalog:` entries in `pnpm-workspace.yaml`, and `pnpm-lock.yaml` to match    |
 
 - Same rules as the dashboard: `min-release-age-days` old, no prereleases, majors stay on the
   dashboard.
@@ -220,7 +216,6 @@ Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
 Inputs:
 
 - `min-release-age-days` (number, default `14`).
-- `gitleaks-script` (string, default `.github/scripts/secrets-scan.sh`; empty skips gitleaks).
 - `ci-workflow` (string, default empty): the file name of the workflow to start on each pushed
   branch, such as `ci.yml`. Empty starts none.
 - `dry-run` (boolean, default `false`): plans each PR and writes it, with the diff, to the run
@@ -256,6 +251,36 @@ jobs:
 ```
 
 Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
+
+## `secret-scan.yml`
+
+Scans the calling repo's full git history for committed secrets with
+[gitleaks](https://github.com/gitleaks/gitleaks), downloaded at the exact version pinned in the
+workflow with its checksum verified. Every caller scans with the same version and rules, and a
+bump here reaches a caller when it re-pins. The workflow needs no secrets and no inputs; it
+checks the caller out with `fetch-depth: 0` and runs no repo code. gitleaks reads the caller's
+own `.gitleaks.toml` at the repo root when present, which is the place for allowlists. A finding
+fails the job and says what to do.
+
+### Setup in the calling repo
+
+Add the job below to the caller's CI. The caller job must grant `contents: read`. The check
+shows up as `secret-scan / gitleaks`; add the caller job to the `needs` of the job you require
+on the base branch.
+
+```yaml
+jobs:
+  secret-scan:
+    permissions:
+      contents: read
+    uses: valuecodes/automation/.github/workflows/secret-scan.yml@<full-commit-sha>
+```
+
+Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
+
+For a local check before a commit, install gitleaks (8.19 or later) and run
+`gitleaks git --staged --redact .` from a pre-commit hook. That scans only what is staged, with
+whatever version is installed; CI is the gate, so there is no pin to keep in the repo.
 
 ## License
 
