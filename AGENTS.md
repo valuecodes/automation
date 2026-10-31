@@ -16,13 +16,13 @@ Reusable GitHub Actions workflows that other repos call with
 | `.github/workflows/maintenance-dashboard.yml` | Reusable: keeps the **Maintenance dashboard** issue        |
 | `.github/workflows/maintenance-updates.yml`   | Reusable: one update PR per kind (Node.js, pnpm, …)        |
 | `.github/workflows/workflow-lint.yml`         | Reusable: actionlint and zizmor over workflow files        |
+| `.github/workflows/secret-scan.yml`           | Reusable: gitleaks over the git history, pinned version    |
 | `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, oxlint, tsc, tests, knip, reusables |
 | `.github/actions/setup/`                      | Composite setup action: pnpm, Node.js, frozen install      |
 | `src/dashboard/`                              | The dashboard's steps, one TypeScript module per step      |
 | `src/updates/`                                | The update PRs' steps, one TypeScript module per step      |
 | `src/lib/`                                    | Shared: GitHub, registry and YAML reading, version rules   |
 | `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions            |
-| `.github/scripts/secrets-scan.sh`             | gitleaks over the git history, with the pinned version     |
 | `scripts/dashboard-dry-run.sh`                | Runs the dashboard's steps locally, prints the body        |
 | `scripts/updates-dry-run.sh`                  | Runs the update steps locally, prints the planned PRs      |
 
@@ -34,7 +34,8 @@ how a run decides, and the caller snippet. Keep it in step with the workflow.
 ## Commands
 
 **Prerequisites:** Node.js 26 (exact version in `.nvmrc`), pnpm 12 (exact version in
-`packageManager` in `package.json`).
+`packageManager` in `package.json`), and a local gitleaks 8.19 or later for the pre-commit
+hook.
 
 ```bash
 pnpm install                     # Install the dev tools, enable the git hooks
@@ -44,7 +45,6 @@ pnpm typecheck                   # tsc --noEmit over src/
 pnpm test                        # node --test over src/**/*.test.ts
 pnpm format                      # oxfmt, writes in place
 pnpm format:check                # oxfmt --check (no writes)
-pnpm secrets:scan                # gitleaks over the git history; `--staged` for the index
 scripts/dashboard-dry-run.sh     # The dashboard body for this repo, or `owner/repo sha dir`
 scripts/updates-dry-run.sh       # The planned update PRs for this repo, or `owner/repo [kind...]`
 ```
@@ -66,7 +66,7 @@ pnpm, curl and the Node.js in `.nvmrc`, and the commit must exist on GitHub.
 Both workflows' logic lives in `src/dashboard/` and `src/updates/` (one module per step,
 `main.ts` dispatches) and `src/lib/`, which holds what they share: the GitHub and registry
 calls, the YAML reader for pnpm's files, and the one copy of each version rule (which release
-is newer and old enough, update signals, Node.js and gitleaks releases), so a PR always
+is newer and old enough, update signals, Node.js releases), so a PR always
 proposes what the dashboard lists. Node.js runs the `.ts` files as they are, with its
 built-in type stripping, so only erasable syntax is allowed (`erasableSyntaxOnly` in
 `tsconfig.json`), imports name the `.ts` extension, and there are no runtime npm packages:
@@ -83,21 +83,18 @@ tests, so an export nothing imports is a finding: drop the `export`, don't add a
 
 Git hooks live in `.githooks/` as plain shell scripts, enabled by `pnpm install` through the
 root `prepare` script (`git config core.hooksPath .githooks`, so it covers every worktree).
-`pre-commit` runs `format:check`, `lint` and `secrets:scan --staged`, `pre-push` runs
-`typecheck`, `test` and `knip`; CI runs all of them again. Never bypass them with
-`--no-verify`. Nothing formats on edit: run `pnpm format` yourself before committing.
+`pre-commit` runs `format:check`, `lint` and `gitleaks git --staged` with the locally installed
+gitleaks (it fails closed: no gitleaks, no commit), `pre-push` runs `typecheck`, `test` and
+`knip`; CI runs all of them again. Never bypass them with `--no-verify`. Nothing formats on
+edit: run `pnpm format` yourself before committing.
 
-`.github/scripts/secrets-scan.sh` runs a local gitleaks (v8.19+) or else the pinned Docker
-image, and exits 2 when it has neither, so the pre-commit hook fails closed. It is also the
-file both maintenance workflows read by default (`gitleaks-script`), so the CI dry runs check
-the gitleaks section and update against this repo's own pin.
-
-actionlint (with shellcheck over the `run:` scripts), shellcheck over `scripts/` and
-`.github/scripts/` and zizmor run in CI only; they are not npm packages. gitleaks runs in CI
-through the same script, in the `secrets-scan` job. CI (`.github/workflows/ci.yml`) runs them
-all on PRs and on push to `main`, with `lint`, `knip`, `typecheck` and `test`, the two linters
-through `workflow-lint.yml`, and calls `maintenance-dashboard.yml` with `dry-run: true`; its
-`ci` job is the check to require on `main`.
+actionlint (with shellcheck over the `run:` scripts), shellcheck over `scripts/`, gitleaks and
+zizmor run in CI only; they are not npm packages. gitleaks runs through this repo's own
+`secret-scan.yml`, which pins its version and checksum: that is the one pin, bumped by hand,
+and callers get it by re-pinning. CI (`.github/workflows/ci.yml`) runs them all on PRs and on
+push to `main`, with `lint`, `knip`, `typecheck` and `test`, the scan and the two linters
+through `secret-scan.yml` and `workflow-lint.yml`, and calls `maintenance-dashboard.yml` with
+`dry-run: true`; its `ci` job is the check to require on `main`.
 
 ---
 

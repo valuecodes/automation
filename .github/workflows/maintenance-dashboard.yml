@@ -2,7 +2,7 @@ name: Maintenance dashboard
 
 # Keeps one issue per repo (label `maintenance-dashboard`, title
 # `Maintenance dashboard: <worst state>`) listing pending updates: the
-# `catalog:` in `pnpm-workspace.yaml`, pnpm, gitleaks, Node.js, `pnpm audit`
+# `catalog:` in `pnpm-workspace.yaml`, pnpm, Node.js, `pnpm audit`
 # findings, osv.dev malicious-package hits and update signals. The title and
 # body are recomputed every run and edited only when they changed. No PRs, no
 # commits; `maintenance-updates.yml` opens PRs for the updates on the current
@@ -15,13 +15,9 @@ on:
   workflow_call:
     inputs:
       min-release-age-days:
-        description: Minimum age of a listed release (npm, pnpm, gitleaks, Node.js).
+        description: Minimum age of a listed release (npm, pnpm, Node.js).
         type: number
         default: 14
-      gitleaks-script:
-        description: File holding `GITLEAKS_VERSION="x.y.z"`. Empty skips the check.
-        type: string
-        default: .github/scripts/secrets-scan.sh
       dry-run:
         description: Write the body to the run summary only; leave the issue and label alone.
         type: boolean
@@ -124,7 +120,6 @@ jobs:
       RUN_ID: ${{ github.run_id }}
       WORKFLOW_REF: ${{ github.workflow_ref }}
       MIN_AGE_DAYS: ${{ inputs.min-release-age-days }}
-      GITLEAKS_SCRIPT: ${{ inputs.gitleaks-script }}
       DRY_RUN: ${{ inputs.dry-run }}
     steps:
       - name: Download the audit result
@@ -205,12 +200,6 @@ jobs:
         run: |
           set -euo pipefail
           node .automation/src/dashboard/main.ts pnpm
-
-      - name: "Section: gitleaks"
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          node .automation/src/dashboard/main.ts gitleaks
 
       - name: "Section: Node.js"
         continue-on-error: true

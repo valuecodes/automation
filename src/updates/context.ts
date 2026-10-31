@@ -6,7 +6,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Fail, common, env } from "../lib/env.ts";
 import type { Common } from "../lib/env.ts";
 
-const KINDS = ["node", "pnpm", "gitleaks", "catalog"] as const;
+const KINDS = ["node", "pnpm", "catalog"] as const;
 type Kind = (typeof KINDS)[number];
 
 const isKind = (value: string): value is Kind =>
@@ -44,23 +44,7 @@ const updateContext = (): UpdateContext => {
   };
 };
 
-/**
- * The script path lands in an API URL and in local paths, so it must be a
- * plain relative path. Returns what is wrong with it, or null.
- */
-const validateGitleaksScript = (path: string): string | null => {
-  if (path === "") {
-    return null;
-  }
-  if (
-    !/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(path) ||
-    path.split("/").some((part) => part === "." || part === "..")
-  ) {
-    return `gitleaks-script must be a relative path such as .github/scripts/secrets-scan.sh, got '${path}'.`;
-  }
-  return null;
-};
-
+/** Returns what is wrong with the `ci-workflow` input, or null. */
 const validateCiWorkflow = (file: string): string | null =>
   file === "" || /^[A-Za-z0-9._-]+\.ya?ml$/.test(file)
     ? null
@@ -85,11 +69,5 @@ const readMeta = (out: string): Meta => {
   return JSON.parse(readFileSync(file, "utf8")) as Meta;
 };
 
-export {
-  updateContext,
-  validateGitleaksScript,
-  validateCiWorkflow,
-  writeMeta,
-  readMeta,
-};
+export { updateContext, validateCiWorkflow, writeMeta, readMeta };
 export type { Kind, UpdateContext, Meta };

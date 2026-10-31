@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { edit as editScript, render as renderGitleaks } from "./gitleaks.ts";
 import { edit as editNvmrc, render as renderNode } from "./node.ts";
 import {
   edit as editPackageJson,
@@ -79,44 +78,4 @@ test("the pnpm update reads the pin, moves the hash and edits package.json", () 
     /sha512 integrity for pnpm 12\.12\.0/,
   );
   assert.equal(renderPnpm("1", "2", "d", false).content.length, 5);
-});
-
-test("the gitleaks update edits the version and digest lines", () => {
-  const script = `#!/bin/sh\nGITLEAKS_VERSION="8.28.0"\nGITLEAKS_DIGEST="sha256:${"a".repeat(64)}"\n`;
-  assert.equal(
-    editScript(script, "8.28.0", "8.30.0", null),
-    script.replace("8.28.0", "8.30.0"),
-  );
-  assert.equal(
-    editScript(script, "8.28.0", "8.30.0", {
-      old: `sha256:${"a".repeat(64)}`,
-      new: `sha256:${"b".repeat(64)}`,
-    }),
-    script.replace("8.28.0", "8.30.0").replace("a".repeat(64), "b".repeat(64)),
-  );
-  assert.throws(
-    () =>
-      editScript(
-        `${script}GITLEAKS_VERSION="8.28.0"\n`,
-        "8.28.0",
-        "8.30.0",
-        null,
-      ),
-    /the script holds GITLEAKS_VERSION="8\.28\.0" more than once/,
-  );
-  const rendered = renderGitleaks("8.28.0", "8.30.0", "2026-09-20", true);
-  assert.equal(rendered.title, "Update gitleaks to 8.30.0");
-  assert.deepEqual(rendered.content.slice(0, 3), [
-    "| Package | Current | Update | Released |",
-    "| --- | --- | --- | --- |",
-    "| gitleaks | 8.28.0 | 8.30.0 | 2026-09-20 |",
-  ]);
-  assert.match(
-    rendered.content.at(-1) ?? "",
-    /digest ghcr\.io serves for `gitleaks:v8\.30\.0`/,
-  );
-  assert.equal(
-    renderGitleaks("8.28.0", "8.30.0", "2026-09-20", false).content.length,
-    5,
-  );
 });

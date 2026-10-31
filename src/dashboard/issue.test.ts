@@ -141,7 +141,8 @@ test("readSections treats a missing section or status as a failed check", (t) =>
     "ok\tno known vulnerabilities\t\n",
   );
   writeFileSync(join(dir, "20-catalog.md"), "half written");
-  writeFileSync(join(dir, "40-gitleaks.md"), "");
+  // An empty fragment without a status is a disabled check, left out.
+  writeFileSync(join(dir, "30-pnpm.md"), "");
   const sections = readSections(dir, runs);
   assert.deepEqual(
     sections.map((s) => [s.id, s.status?.state, s.failed]),
@@ -149,7 +150,6 @@ test("readSections treats a missing section or status as a failed check", (t) =>
       ["10-security", "ok", false],
       ["15-supply-chain", "failed", true],
       ["20-catalog", "failed", true],
-      ["30-pnpm", "failed", true],
       ["50-node", "failed", true],
     ],
   );
@@ -160,7 +160,6 @@ test("readSections treats a missing section or status as a failed check", (t) =>
   assert.deepEqual(out, [
     "::error::The Supply chain check failed.",
     "::error::The Dependencies check failed.",
-    "::error::The pnpm check failed.",
     "::error::The Node.js check failed.",
   ]);
 });

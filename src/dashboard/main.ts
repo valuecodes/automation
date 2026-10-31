@@ -7,7 +7,6 @@ import { error as annotate } from "../lib/actions.ts";
 import { Fail } from "../lib/env.ts";
 import { audit, lockfile } from "./audit.ts";
 import { catalog } from "./catalog.ts";
-import { gitleaks } from "./gitleaks.ts";
 import { issue } from "./issue.ts";
 import { node } from "./node.ts";
 import { pnpm } from "./pnpm.ts";
@@ -23,7 +22,6 @@ const steps: Record<string, () => Promise<void> | void> = {
   catalog,
   "supply-chain": supplyChain,
   pnpm,
-  gitleaks,
   node,
   issue: () => issue(),
 };

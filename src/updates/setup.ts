@@ -9,28 +9,20 @@ import { writeCutoff } from "../lib/cutoff.ts";
 import { Fail } from "../lib/env.ts";
 import { api as githubApi, repoFile } from "../lib/github.ts";
 import type { Api } from "../lib/github.ts";
-import {
-  updateContext,
-  validateCiWorkflow,
-  validateGitleaksScript,
-  writeMeta,
-} from "./context.ts";
+import { updateContext, validateCiWorkflow, writeMeta } from "./context.ts";
 import type { Kind } from "./context.ts";
 
 const FILES = {
   workspace: "pnpm-workspace.yaml",
   packageJson: "package.json",
   nvmrc: ".nvmrc",
-  gitleaksScript: "gitleaks-script",
 } as const;
 
 /** The repo files a kind reads, as `[path in the repo, name under $SRC]`. */
-const filesFor = (kind: Kind, gitleaksScript: string): [string, string][] => {
+const filesFor = (kind: Kind): [string, string][] => {
   const files: Record<Kind, [string, string][]> = {
     node: [[".nvmrc", FILES.nvmrc]],
     pnpm: [["package.json", FILES.packageJson]],
-    gitleaks:
-      gitleaksScript === "" ? [] : [[gitleaksScript, FILES.gitleaksScript]],
     catalog: [
       ["pnpm-workspace.yaml", FILES.workspace],
       ["package.json", FILES.packageJson],
@@ -46,13 +38,9 @@ const setup = async (api: Api = githubApi): Promise<void> => {
   const ctx = updateContext();
   mkdirSync(ctx.src, { recursive: true });
   mkdirSync(ctx.out, { recursive: true });
-  for (const check of [
-    validateGitleaksScript(ctx.gitleaksScript),
-    validateCiWorkflow(ctx.ciWorkflow),
-  ]) {
-    if (check !== null) {
-      throw new Fail(check);
-    }
+  const check = validateCiWorkflow(ctx.ciWorkflow);
+  if (check !== null) {
+    throw new Fail(check);
   }
   const { default_branch: base } = await api<{ default_branch: string }>(
     "GET",
@@ -90,7 +78,7 @@ const setup = async (api: Api = githubApi): Promise<void> => {
   writeCutoff(ctx.src, ctx.minAgeDays);
 
   // As in the dashboard: a missing file makes its kind "not applicable".
-  for (const [path, dest] of filesFor(ctx.kind, ctx.gitleaksScript)) {
+  for (const [path, dest] of filesFor(ctx.kind)) {
     const bytes = await repoFile(ctx.repo, path, baseSha);
     if (bytes === null) {
       console.log(`${path} is not in the repo.`);

@@ -40,7 +40,6 @@ type Common = {
   caller: string;
   runsUrl: string;
   minAgeDays: number;
-  gitleaksScript: string;
   dryRun: boolean;
 };
 
@@ -65,7 +64,6 @@ const common = (): Common => {
     caller,
     runsUrl: `${serverUrl}/${repo}/actions/workflows/${caller.replace(/^.*\//, "")}`,
     minAgeDays: Number(minAge),
-    gitleaksScript: env("GITLEAKS_SCRIPT"),
     dryRun: env("DRY_RUN") === "true",
   };
 };

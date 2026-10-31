@@ -8,13 +8,13 @@
 #
 #   scripts/updates-dry-run.sh [owner/repo [kind...]]
 #
-# Defaults to this repo and every kind (node, pnpm, gitleaks, catalog). Like
+# Defaults to this repo and every kind (node, pnpm, catalog). Like
 # the workflow, it reads the head of the repo's default branch on GitHub, not
 # a local checkout. The pnpm and catalog kinds need that commit on disk to
 # resolve the lockfile, so it is fetched (depth 1, over HTTPS) into the output
 # directory; the local pnpm stands in for the workflow's pnpm and Node.js
-# setup. The inputs are fixed to their defaults (14 days,
-# `.github/scripts/secrets-scan.sh`, no `ci-workflow`). Needs gh (logged in),
+# setup. The inputs are fixed to their defaults (14 days, no
+# `ci-workflow`). Needs gh (logged in),
 # git, jq, pnpm, curl, diff and the Node.js in .nvmrc. Talks to the real
 # registries and osv.dev, never pushes or touches a PR. Each kind's work files
 # and summary land in tmp/updates/<owner>-<repo>/<kind>/ (ignored by git), and
@@ -40,12 +40,11 @@ export REPO=${1:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}
 shift || true
 kinds=("$@")
 if (( ${#kinds[@]} == 0 )); then
-  kinds=(node pnpm gitleaks catalog)
+  kinds=(node pnpm catalog)
 fi
 export SERVER_URL=https://github.com
 export WORKFLOW_REF="$REPO/.github/workflows/maintenance-updates.yml@refs/heads/local"
 export MIN_AGE_DAYS=14
-export GITLEAKS_SCRIPT=.github/scripts/secrets-scan.sh
 export CI_WORKFLOW=""
 export DRY_RUN=true
 out="$root/tmp/updates/${REPO//\//-}"
@@ -80,9 +79,9 @@ run_step() {
 run_kind() {
   export KIND=$1
   case $KIND in
-    node | pnpm | gitleaks | catalog) ;;
+    node | pnpm | catalog) ;;
     *)
-      echo "::error::Unknown kind '$KIND'; use node, pnpm, gitleaks or catalog." >&2
+      echo "::error::Unknown kind '$KIND'; use node, pnpm or catalog." >&2
       exit 1
       ;;
   esac

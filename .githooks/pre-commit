@@ -12,7 +12,9 @@ set -eu
 pnpm format:check
 pnpm lint
 
-# Scan only what is staged. This fails closed: when neither gitleaks nor Docker
-# is available, secrets:scan exits 2 and the commit is refused, since the point
-# of this hook is to stop a secret before it reaches the remote.
-pnpm secrets:scan --staged
+# Scan only what is staged, with a local gitleaks (8.19+ for `git --staged`).
+# This fails closed: without gitleaks the commit is refused, since the point of
+# this hook is to stop a secret before it reaches the remote. CI scans the full
+# history with the version pinned in .github/workflows/secret-scan.yml.
+command -v gitleaks >/dev/null || { echo "install gitleaks: https://github.com/gitleaks/gitleaks#installing" >&2; exit 2; }
+gitleaks git --staged --redact "$(git rev-parse --show-toplevel)"
