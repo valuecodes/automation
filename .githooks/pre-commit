@@ -16,5 +16,5 @@ pnpm lint
 # This fails closed: without gitleaks the commit is refused, since the point of
 # this hook is to stop a secret before it reaches the remote. CI scans the full
 # history with the version pinned in .github/workflows/secret-scan.yml.
-command -v gitleaks >/dev/null || { echo "install gitleaks: https://github.com/gitleaks/gitleaks#installing" >&2; exit 2; }
+gitleaks git --help >/dev/null 2>&1 || { echo "install gitleaks 8.19+: https://github.com/gitleaks/gitleaks#installing" >&2; exit 2; }
 gitleaks git --staged --redact "$(git rev-parse --show-toplevel)"
