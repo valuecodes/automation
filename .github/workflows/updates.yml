@@ -1,7 +1,7 @@
-name: Maintenance updates
+name: Updates
 
 # Keeps one PR per update kind open in the calling repo, on the branch
-# `maintenance-updates/<kind>`: Node.js (`.nvmrc`), pnpm (`packageManager`)
+# `maintain-kit/<kind>`: Node.js (`.nvmrc`), pnpm (`packageManager`)
 # and the `catalog:` in `pnpm-workspace.yaml` with its lockfile. Only updates
 # on the current major are
 # proposed; majors stay on the maintenance dashboard. Every run recomputes each
@@ -11,7 +11,7 @@ name: Maintenance updates
 # the lockfile without installing or running repo code. The steps are
 # TypeScript in `src/updates/`, checked out from this repo at the commit the
 # caller pinned. Other repos call it with
-# `uses: valuecodes/automation/.github/workflows/maintenance-updates.yml@<sha>`.
+# `uses: valuecodes/maintain-kit/.github/workflows/updates.yml@<sha>`.
 
 on:
   workflow_call:
@@ -50,7 +50,7 @@ jobs:
     # One run at a time per repo and kind, since each owns one branch and PR. A
     # dry run writes nothing shared, so it gets its own group (see the dashboard).
     concurrency:
-      group: ${{ inputs.dry-run && format('maintenance-updates-dry-run-{0}-{1}', github.run_id, matrix.kind) || format('maintenance-updates-{0}-{1}', github.repository, matrix.kind) }}
+      group: ${{ inputs.dry-run && format('maintain-kit-updates-dry-run-{0}-{1}', github.run_id, matrix.kind) || format('maintain-kit-updates-{0}-{1}', github.repository, matrix.kind) }}
       cancel-in-progress: false
     # `GH_TOKEN` is set only on the steps that call the API, so the step that
     # runs pnpm in the caller's checkout never sees a write token.
@@ -63,7 +63,7 @@ jobs:
       CI_WORKFLOW: ${{ inputs.ci-workflow }}
       DRY_RUN: ${{ inputs.dry-run }}
       # The caller's checkout for the lockfile, in a subdirectory: a checkout
-      # at the workspace root would delete `.automation/` first.
+      # at the workspace root would delete `.maintain-kit/` first.
       CHECKOUT: ${{ github.workspace }}/caller
     steps:
       # Only this workflow file reaches the runner, so the steps are checked
@@ -86,9 +86,9 @@ jobs:
       - name: Check out the update steps
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: valuecodes/automation
+          repository: valuecodes/maintain-kit
           ref: ${{ steps.self.outputs.sha }}
-          path: .automation
+          path: .maintain-kit
           persist-credentials: false
           fetch-depth: 1
 
@@ -97,7 +97,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version-file: .automation/.nvmrc
+          node-version-file: .maintain-kit/.nvmrc
 
       # Each kind's steps hand each other files under `$RUNNER_TEMP/update`:
       # `state` (`update`, `current`, `na` or `blocked`, with a reason) and,
@@ -105,7 +105,7 @@ jobs:
       # the changed `paths` with each one's `old/` and `new/` content, and
       # optionally `osv-queries.jsonl` and `summary.md` (run summary only).
       # The last step turns that into a commit and a PR. This step also saves
-      # this job's Node.js as `AUTOMATION_NODE`, since the caller's own may
+      # this job's Node.js as `MAINTAIN_KIT_NODE`, since the caller's own may
       # replace it on PATH below.
       - name: Read the repo files on the default branch
         id: setup
@@ -113,25 +113,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          node .automation/src/updates/main.ts setup
+          node .maintain-kit/src/updates/main.ts setup
 
       - name: "Node.js: find the update"
         if: matrix.kind == 'node'
         run: |
           set -euo pipefail
-          node .automation/src/updates/main.ts node
+          node .maintain-kit/src/updates/main.ts node
 
       - name: "pnpm: find the update"
         if: matrix.kind == 'pnpm'
         run: |
           set -euo pipefail
-          node .automation/src/updates/main.ts pnpm
+          node .maintain-kit/src/updates/main.ts pnpm
 
       - name: "Dependencies: pick the updates"
         if: matrix.kind == 'catalog'
         run: |
           set -euo pipefail
-          node .automation/src/updates/main.ts catalog
+          node .maintain-kit/src/updates/main.ts catalog
 
       # The only checkout of the caller, for the kinds that change
       # `pnpm-lock.yaml`: catalog, and pnpm, since a pnpm 10+ lockfile pins
@@ -167,7 +167,7 @@ jobs:
         if: env.RESOLVE == 'true'
         run: |
           set -euo pipefail
-          "$AUTOMATION_NODE" .automation/src/updates/main.ts resolve
+          "$MAINTAIN_KIT_NODE" .maintain-kit/src/updates/main.ts resolve
 
       # The resolve step ran the caller's pnpm in the caller's tree without a
       # token, and the steps after it run with the write token from the
@@ -181,12 +181,12 @@ jobs:
           SHA: ${{ steps.self.outputs.sha }}
         run: |
           set -euo pipefail
-          git -C .automation update-index --really-refresh -q >/dev/null || true
-          head=$(git -C .automation rev-parse HEAD)
+          git -C .maintain-kit update-index --really-refresh -q >/dev/null || true
+          head=$(git -C .maintain-kit rev-parse HEAD)
           # One line, since an annotation shows only the first.
-          changed=$(git -C .automation status --porcelain --untracked-files=all | tr '\n' ' ')
+          changed=$(git -C .maintain-kit status --porcelain --untracked-files=all | tr '\n' ' ')
           if [[ $head != "$SHA" || -n $changed ]]; then
-            echo "::error::The checkout of the update steps (.automation) changed after it was made (HEAD $head, pinned $SHA${changed:+, changed files: $changed}), so the steps that hold the token did not run."
+            echo "::error::The checkout of the update steps (.maintain-kit) changed after it was made (HEAD $head, pinned $SHA${changed:+, changed files: $changed}), so the steps that hold the token did not run."
             exit 1
           fi
 
@@ -196,11 +196,11 @@ jobs:
       - name: Check the new versions on osv.dev
         run: |
           set -euo pipefail
-          "$AUTOMATION_NODE" .automation/src/updates/main.ts osv
+          "$MAINTAIN_KIT_NODE" .maintain-kit/src/updates/main.ts osv
 
       - name: Open or update the PR
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          "$AUTOMATION_NODE" .automation/src/updates/main.ts pr
+          "$MAINTAIN_KIT_NODE" .maintain-kit/src/updates/main.ts pr

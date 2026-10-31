@@ -1,6 +1,6 @@
 // "Open or update the PR": the update as a commit on the base commit, made
 // through the API (GitHub signs it, no credentials touch a checkout), on
-// the branch `maintenance-updates/<kind>`, and the PR opened or edited.
+// the branch `maintain-kit/<kind>`, and the PR opened or edited.
 // When nothing is due any more, this workflow's PR is closed and its
 // branch deleted; anyone else's commit on the branch leaves both alone.
 
@@ -24,9 +24,9 @@ import {
 import type { Outcome } from "./outcome.ts";
 
 const BOT = "github-actions[bot]";
-const LABEL = "maintenance-updates";
+const LABEL = "maintain-kit-updates";
 const SOURCE_LINK =
-  " · Source: [valuecodes/automation](https://github.com/valuecodes/automation)";
+  " · Source: [valuecodes/maintain-kit](https://github.com/valuecodes/maintain-kit)";
 
 const label = (kind: Kind): string =>
   ({ node: "Node.js", catalog: "Dependencies" })[kind as string] ?? kind;
@@ -34,7 +34,7 @@ const label = (kind: Kind): string =>
 /** The PR title is a plain sentence; the commit follows the
  * `<type>: <subject>` convention, with the trailer `ours` checks. */
 const commitMessage = (title: string, kind: Kind): string =>
-  `chore: ${title.charAt(0).toLowerCase()}${title.slice(1)}\n\nMaintenance-Updates: ${kind}`;
+  `chore: ${title.charAt(0).toLowerCase()}${title.slice(1)}\n\nMaintain-Kit-Updates:${kind}`;
 
 type BodyInput = {
   ciWorkflow: string;
@@ -67,7 +67,7 @@ const body = (title: string, text: string, input: BodyInput): Body => {
   const hash = createHash("sha256")
     .update(`${title}\n${content}`)
     .digest("hex");
-  const marker = `<!-- maintenance-updates:${hash} -->`;
+  const marker = `<!-- maintain-kit-updates:${hash} -->`;
   return {
     content,
     body: `${content}\n\n---\nLast changed: ${input.date} · [Workflow runs](${input.runsUrl})${SOURCE_LINK}\n\n${note}\n${marker}\n`,
@@ -126,7 +126,7 @@ const ours = (compare: Compare, kind: Kind): boolean => {
       c.author?.login === BOT &&
       (c.commit?.message ?? "")
         .split("\n")
-        .includes(`Maintenance-Updates: ${kind}`),
+        .includes(`Maintain-Kit-Updates:${kind}`),
   );
 };
 
@@ -160,7 +160,7 @@ const publish = async (
   log: Log = console.log,
 ): Promise<void> => {
   const { repo, kind } = ctx;
-  const branch = `maintenance-updates/${kind}`;
+  const branch = `maintain-kit/${kind}`;
   const owner = repo.split("/")[0] ?? "";
   // This workflow's PRs from this repo; a fork's PR on a branch of the same
   // name is not its to touch.
@@ -304,7 +304,7 @@ const publish = async (
     const spec = {
       color: "1d76db",
       description:
-        "Opened by the maintenance-updates workflow (valuecodes/automation)",
+        "Opened by the maintain-kit-updates workflow (valuecodes/maintain-kit)",
     };
     try {
       try {
@@ -317,7 +317,7 @@ const publish = async (
       }
     } catch {
       warning(
-        "Could not create the maintenance-updates label; opening the PR without it.",
+        "Could not create the maintain-kit-updates label; opening the PR without it.",
       );
       labels = [];
     }

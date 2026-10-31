@@ -4,10 +4,10 @@ import { excludePatterns, excluded, unexpected } from "./resolve.ts";
 
 test("unexpected lists the status lines the kind may not produce", () => {
   const status =
-    " M pnpm-lock.yaml\n M pnpm-workspace.yaml\n?? .automation/x\n M src/a.ts\n";
+    " M pnpm-lock.yaml\n M pnpm-workspace.yaml\n?? .maintain-kit/x\n M src/a.ts\n";
   assert.deepEqual(
     unexpected(status, /^ M (pnpm-lock|pnpm-workspace)\.yaml$/),
-    ["?? .automation/x", " M src/a.ts"],
+    ["?? .maintain-kit/x", " M src/a.ts"],
   );
   assert.deepEqual(
     unexpected(" M package.json\n", /^ M (package\.json|pnpm-lock\.yaml)$/),

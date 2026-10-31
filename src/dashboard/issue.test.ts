@@ -170,7 +170,7 @@ test("footer and unchanged agree on the marker", () => {
     body,
     /^content\n\n---\nLast changed: 2026-10-29 · \[Workflow runs\]\(https:\/\/runs\) · Source: /,
   );
-  assert.match(body, /\nnote\n<!-- maintenance-dashboard:[0-9a-f]{64} -->\n$/);
+  assert.match(body, /\nnote\n<!-- maintain-kit-dashboard:[0-9a-f]{64} -->\n$/);
   assert.equal(
     unchanged(
       { number: 1, title: "t", body: body.replaceAll("\n", "\r\n") },
@@ -239,8 +239,8 @@ test("publish creates, edits or leaves the issue", async (t) => {
   await publish(empty.api, "o/r", "t", "content", body, "note", log);
   assert.deepEqual(empty.calls, [
     "POST repos/o/r/labels",
-    "PATCH repos/o/r/labels/maintenance-dashboard",
-    "GET repos/o/r/issues?labels=maintenance-dashboard&state=open&per_page=100",
+    "PATCH repos/o/r/labels/maintain-kit-dashboard",
+    "GET repos/o/r/issues?labels=maintain-kit-dashboard&state=open&per_page=100",
     "POST repos/o/r/issues",
   ]);
   assert.deepEqual(logs, [
@@ -255,7 +255,7 @@ test("publish creates, edits or leaves the issue", async (t) => {
   assert.equal(same.calls.at(-1), "GET repos/o/r/issues/3");
   assert.equal(logs.at(-1), "Issue #3 is unchanged.");
   assert.deepEqual(out, [
-    "::warning::Several open issues carry the maintenance-dashboard label; editing #3 and leaving the rest.",
+    "::warning::Several open issues carry the maintain-kit-dashboard label; editing #3 and leaving the rest.",
   ]);
   const stale = fakeApi([{ number: 3, title: "old", body }]);
   await publish(stale.api, "o/r", "t", "content", body, "note", log);

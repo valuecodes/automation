@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the steps of .github/workflows/maintenance-updates.yml here, one kind
+# Runs the steps of .github/workflows/updates.yml here, one kind
 # after another and with dry-run on, and prints the PR each kind would open
 # or the reason it opens none: the steps in src/updates/ with the local
 # Node.js. CI runs the workflow in dry-run mode against this repo only; this
@@ -43,7 +43,7 @@ if (( ${#kinds[@]} == 0 )); then
   kinds=(node pnpm catalog)
 fi
 export SERVER_URL=https://github.com
-export WORKFLOW_REF="$REPO/.github/workflows/maintenance-updates.yml@refs/heads/local"
+export WORKFLOW_REF="$REPO/.github/workflows/updates.yml@refs/heads/local"
 export MIN_AGE_DAYS=14
 export CI_WORKFLOW=""
 export DRY_RUN=true

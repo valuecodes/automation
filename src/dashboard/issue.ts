@@ -27,9 +27,9 @@ const SECTIONS = [
   "50-node",
 ] as const;
 
-const LABEL = "maintenance-dashboard";
+const LABEL = "maintain-kit-dashboard";
 const SOURCE_LINK =
-  " · Source: [valuecodes/automation](https://github.com/valuecodes/automation)";
+  " · Source: [valuecodes/maintain-kit](https://github.com/valuecodes/maintain-kit)";
 // Issue bodies are limited to 65,536 characters; the run summary always
 // gets the full body.
 const LIMIT = 60_000;
@@ -271,7 +271,7 @@ const footer = (
 ): string => {
   // The hash excludes the date, so an unchanged body is not re-saved.
   const hash = createHash("sha256").update(body).digest("hex");
-  return `${body}\n\n---\nLast changed: ${date} · [Workflow runs](${runsUrl})${SOURCE_LINK}\n\n${note}\n<!-- maintenance-dashboard:${hash} -->\n`;
+  return `${body}\n\n---\nLast changed: ${date} · [Workflow runs](${runsUrl})${SOURCE_LINK}\n\n${note}\n<!-- maintain-kit-dashboard:${hash} -->\n`;
 };
 
 type Issue = {
@@ -297,7 +297,7 @@ const unchanged = (
   // Like the shell's `$(...)`, the comparison ignores trailing newlines.
   const existing = (issue.body ?? "").replaceAll("\r", "").replace(/\n+$/, "");
   const prefix = `${body}\n\n---\nLast changed: `;
-  const suffix = `${SOURCE_LINK}\n\n${note}\n<!-- maintenance-dashboard:${hash} -->`;
+  const suffix = `${SOURCE_LINK}\n\n${note}\n<!-- maintain-kit-dashboard:${hash} -->`;
   return (
     issue.title === title &&
     existing.startsWith(prefix) &&
@@ -319,7 +319,7 @@ const publish = async (
   const label = {
     color: "1d76db",
     description:
-      "Kept up to date by the maintenance-dashboard workflow (valuecodes/automation)",
+      "Kept up to date by the maintain-kit-dashboard workflow (valuecodes/maintain-kit)",
   };
   try {
     await api("POST", `repos/${repo}/labels`, { name: LABEL, ...label });
@@ -352,7 +352,7 @@ const publish = async (
   const number = first.number;
   if (issues.length > 1) {
     warning(
-      `Several open issues carry the maintenance-dashboard label; editing #${number} and leaving the rest.`,
+      `Several open issues carry the maintain-kit-dashboard label; editing #${number} and leaving the rest.`,
     );
   }
   // Editing the title does not notify anyone either.

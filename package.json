@@ -1,5 +1,5 @@
 {
-  "name": "automation",
+  "name": "maintain-kit",
   "private": true,
   "description": "Reusable GitHub Actions workflows",
   "license": "MIT",

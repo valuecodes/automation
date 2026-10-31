@@ -9,22 +9,22 @@ Guidelines for AI agents and contributors working in this repo.
 ## Structure
 
 Reusable GitHub Actions workflows that other repos call with
-`uses: valuecodes/automation/.github/workflows/<file>@<full-commit-sha>`.
+`uses: valuecodes/maintain-kit/.github/workflows/<file>@<full-commit-sha>`.
 
-| Path                                          | What                                                       |
-| --------------------------------------------- | ---------------------------------------------------------- |
-| `.github/workflows/maintenance-dashboard.yml` | Reusable: keeps the **Maintenance dashboard** issue        |
-| `.github/workflows/maintenance-updates.yml`   | Reusable: one update PR per kind (Node.js, pnpm, …)        |
-| `.github/workflows/workflow-lint.yml`         | Reusable: actionlint and zizmor over workflow files        |
-| `.github/workflows/secret-scan.yml`           | Reusable: gitleaks over the git history, pinned version    |
-| `.github/workflows/ci.yml`                    | This repo's CI: oxfmt, oxlint, tsc, tests, knip, reusables |
-| `.github/actions/setup/`                      | Composite setup action: pnpm, Node.js, frozen install      |
-| `src/dashboard/`                              | The dashboard's steps, one TypeScript module per step      |
-| `src/updates/`                                | The update PRs' steps, one TypeScript module per step      |
-| `src/lib/`                                    | Shared: GitHub, registry and YAML reading, version rules   |
-| `.github/dependabot.yml`                      | Monthly grouped bumps of the SHA-pinned actions            |
-| `scripts/dashboard-dry-run.sh`                | Runs the dashboard's steps locally, prints the body        |
-| `scripts/updates-dry-run.sh`                  | Runs the update steps locally, prints the planned PRs      |
+| Path                                  | What                                                       |
+| ------------------------------------- | ---------------------------------------------------------- |
+| `.github/workflows/dashboard.yml`     | Reusable: keeps the **Maintenance dashboard** issue        |
+| `.github/workflows/updates.yml`       | Reusable: one update PR per kind (Node.js, pnpm, …)        |
+| `.github/workflows/workflow-lint.yml` | Reusable: actionlint and zizmor over workflow files        |
+| `.github/workflows/secret-scan.yml`   | Reusable: gitleaks over the git history, pinned version    |
+| `.github/workflows/ci.yml`            | This repo's CI: oxfmt, oxlint, tsc, tests, knip, reusables |
+| `.github/actions/setup/`              | Composite setup action: pnpm, Node.js, frozen install      |
+| `src/dashboard/`                      | The dashboard's steps, one TypeScript module per step      |
+| `src/updates/`                        | The update PRs' steps, one TypeScript module per step      |
+| `src/lib/`                            | Shared: GitHub, registry and YAML reading, version rules   |
+| `.github/dependabot.yml`              | Monthly grouped bumps of the SHA-pinned actions            |
+| `scripts/dashboard-dry-run.sh`        | Runs the dashboard's steps locally, prints the body        |
+| `scripts/updates-dry-run.sh`          | Runs the update steps locally, prints the planned PRs      |
 
 `README.md` is the user-facing doc for each reusable workflow: what it does, a flowchart of
 how a run decides, and the caller snippet. Keep it in step with the workflow.
@@ -49,7 +49,7 @@ scripts/dashboard-dry-run.sh     # The dashboard body for this repo, or `owner/r
 scripts/updates-dry-run.sh       # The planned update PRs for this repo, or `owner/repo [kind...]`
 ```
 
-`scripts/updates-dry-run.sh` does the same for `maintenance-updates.yml`: it runs each kind's
+`scripts/updates-dry-run.sh` does the same for `updates.yml`: it runs each kind's
 steps against the head of the repo's default branch on GitHub, with dry-run on (nothing pushed,
 no PR touched), and prints the PR each kind would open or why it opens none. For the pnpm and
 catalog kinds it fetches that commit into `tmp/updates/` and resolves the lockfile with the
@@ -93,7 +93,7 @@ zizmor run in CI only; they are not npm packages. gitleaks runs through this rep
 `secret-scan.yml`, which pins its version and checksum: that is the one pin, bumped by hand,
 and callers get it by re-pinning. CI (`.github/workflows/ci.yml`) runs them all on PRs and on
 push to `main`, with `lint`, `knip`, `typecheck` and `test`, the scan and the two linters
-through `secret-scan.yml` and `workflow-lint.yml`, and calls `maintenance-dashboard.yml` with
+through `secret-scan.yml` and `workflow-lint.yml`, and calls `dashboard.yml` with
 `dry-run: true`; its `ci` job is the check to require on `main`.
 
 ---
@@ -111,7 +111,7 @@ through `secret-scan.yml` and `workflow-lint.yml`, and calls `maintenance-dashbo
   and verify its checksum (see actionlint in `workflow-lint.yml`).
 - **Scripts reach the runner by checkout.** A caller gets only the workflow file, so a job that
   runs `src/` first checks this repo out at `job.workflow_sha` (the commit the caller pinned)
-  into `.automation/` with `persist-credentials: false`, then sets up the Node.js in `.nvmrc`.
+  into `.maintain-kit/` with `persist-credentials: false`, then sets up the Node.js in `.nvmrc`.
   Read the SHA from `toJSON(job)` in a validating step: actionlint does not know the property.
 - **Pin every action by full SHA** with the version as a comment:
   `uses: actions/checkout@<sha> # v7.0.1`. Dependabot keeps both current.
