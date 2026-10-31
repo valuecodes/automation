@@ -281,7 +281,10 @@ Replace `<full-commit-sha>` with a commit SHA of this repo. Do not use `@main`.
 
 For a local check before a commit, install gitleaks (8.19 or later) and run
 `gitleaks git --staged --redact .` from a pre-commit hook. That scans only what is staged, with
-whatever version is installed; CI is the gate, so there is no pin to keep in the repo.
+whatever version is installed; CI is the gate, so there is no pin to keep in the repo. To
+install it: `brew install gitleaks` (macOS, Linux and WSL), or unpack the `linux_x64` tarball
+from the [releases page](https://github.com/gitleaks/gitleaks/releases) into a directory on
+PATH such as `~/.local/bin`.
 
 ## License
 
